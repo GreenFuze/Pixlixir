@@ -69,7 +69,7 @@ Scenarios A–G. Status for this release:
 |---|---|
 | A — install, panel, detect account, contextual action, no companion | implemented; awaiting your manual run |
 | B — split an old scan, save, verify, original preserved | implemented; protocol pieces live-verified; awaiting your manual run |
-| C — damaged-photo repair | not started (Phase 3) |
+| C — damaged-photo repair | conservative repair built into Split (Repair brush, dust & scratches); standalone Restore for any photo still to do |
 | D — brush + text edit | not started (Phase 3) |
 | E — duplicates | not started (Phase 3) |
 | F — error handling on protocol change | implemented for the split path (typed shape checks, no guessed retries) |

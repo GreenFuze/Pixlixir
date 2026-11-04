@@ -7,6 +7,10 @@ import type { Point } from "../geometry.js";
 import { Raster, type GrayImage } from "../raster.js";
 
 export interface Component {
+  /** 1-based label in the accompanying label map. */
+  label: number;
+  /** Index of one pixel belonging to the component. */
+  seed: number;
   area: number;
   /** Leftmost and rightmost pixel of each row (sufficient for the convex hull). */
   rowExtremes: Point[];
@@ -97,8 +101,8 @@ export class BinaryMorphology {
     return out;
   }
 
-  /** 4-connected components of foreground pixels. */
-  static components(mask: GrayImage): Component[] {
+  /** 4-connected components of foreground pixels, plus the label map (0 = background). */
+  static components(mask: GrayImage): { components: Component[]; labels: Int32Array } {
     const { width: w, height: h, data } = mask;
     const labels = new Int32Array(w * h);
     const result: Component[] = [];
@@ -144,8 +148,8 @@ export class BinaryMorphology {
         const x1 = rowMax.get(y)!;
         rowExtremes.push({ x: x0, y }, { x: x0, y: y + 1 }, { x: x1 + 1, y }, { x: x1 + 1, y: y + 1 });
       }
-      result.push({ area, rowExtremes, minX, minY, maxX, maxY });
+      result.push({ label, seed: start, area, rowExtremes, minX, minY, maxX, maxY });
     }
-    return result;
+    return { components: result, labels };
   }
 }

@@ -126,18 +126,20 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | R-02 | Split: adjust boundaries, add missed, remove false detections | 3 | implemented |
 | R-03 | Split: crop/straighten/perspective-correct each print | 3 | implemented |
 | R-04 | Split: save each as a new item; original untouched; provenance recorded | 3 | implemented |
-| R-05 | Split: optional per-print enhancement | 4 | todo |
-| R-06 | Damage repair — conservative (tears, cracks, folds, scratches, dust, stains) | 3 | todo |
+| R-05 | Split: optional per-print enhancement | 4 | implemented |
+| R-06 | Damage repair — conservative (tears, cracks, folds, scratches, dust, stains) | 3 | implemented |
 | R-07 | Damage repair — generative reconstruction (flagged as invented detail) | 4 | todo |
-| R-08 | Manual damage painting + editable auto-detected damage mask | 3 | todo |
-| R-09 | Color restoration: fade, WB, contrast, cast removal, yellowing (with "preserve character" option) | 4 | todo |
+| R-08 | Manual damage painting + editable auto-detected damage mask | 3 | implemented |
+| R-09 | Color restoration: fade, WB, contrast, cast removal, yellowing (with "preserve character" option) | 4 | implemented |
 | R-10 | Colorize B&W | 4 | todo |
-| R-11 | Scan improvements: deskew, uneven lighting, glare, reflections, curvature, moiré, dust | 4 | todo |
+| R-11 | Scan improvements: deskew, uneven lighting, glare, reflections, curvature, moiré, dust (built: perspective/deskew, scene-measured lighting, glare reduction, dust; not yet: curvature, moiré) | 4 | implemented |
 | R-12 | Multi-exposure scan fusion | 6 | research |
 | R-13 | Negatives (incl. orange mask) and slides | 6 | todo |
 | R-14 | Front/back pairing + OCR/handwriting extraction (never auto-verified) | 4 | todo |
 | R-15 | Fragment reassembly of torn photos | 6 | research |
 | R-16 | Find a cleaner copy in library before generative fill | 6 | research |
+| R-18 | Multi-shot glare removal (2+ photos of the same page from different angles, merged — PhotoScan-style). Recommended next: single-photo glare removal is fundamentally limited | 3 | todo |
+| R-19 | Automatic print orientation (detect sideways/upside-down prints; today: per-photo and "rotate all" buttons) | 3 | research |
 | R-17 | Batch digitization overview (detections, failures, quality warnings, review before save) | 4 | todo |
 
 ## D — Smart Cleanup

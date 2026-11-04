@@ -35,6 +35,14 @@ describe("Geometry", () => {
     expect(q).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
   });
 
+  it("reduces a convex hull to an enclosing perspective quad", () => {
+    const quad = [{ x: 10, y: 10 }, { x: 110, y: 0 }, { x: 120, y: 90 }, { x: 0, y: 80 }];
+    // Densify the edges so the hull has many vertices, as pixel hulls do.
+    const pts = quad.flatMap((a, i) => { const b = quad[(i + 1) % 4]!; return Array.from({ length: 10 }, (_, k) => ({ x: a.x + ((b.x - a.x) * k) / 10, y: a.y + ((b.y - a.y) * k) / 10 })); });
+    const q = Geometry.enclosingQuad(Geometry.convexHull(pts))!;
+    expect(cornerError(q, quad)).toBeLessThan(1e-6);
+  });
+
   it("rejects degenerate input", () => {
     expect(() => Geometry.minAreaRect([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toThrow(/at least 3/);
   });
@@ -63,6 +71,26 @@ describe("PrintDetector", () => {
       scan.addPrint({ cx: 280, cy: 400, w: 380, h: 300, angleDeg: -3, seed: 4, border: { rgb: [246, 246, 244], width: 18 }, edgeShadow: true }),
       scan.addPrint({ cx: 740, cy: 380, w: 300, h: 420, angleDeg: 6, seed: 5, border: { rgb: [246, 246, 244], width: 18 }, edgeShadow: true }),
     ];
+    const prints = new PrintDetector().detect(scan.image);
+    expect(prints).toHaveLength(2);
+    prints.forEach((p, i) => expect(cornerError(p.quad, truths[i]!)).toBeLessThan(8));
+  });
+
+  it("follows perspective-distorted prints with a quad, not a loose rectangle", () => {
+    const scan = new SyntheticScan(1000, 800, [35, 35, 40]);
+    const truth = scan.addQuadPrint([{ x: 180, y: 150 }, { x: 760, y: 120 }, { x: 820, y: 640 }, { x: 140, y: 600 }], 7);
+    const prints = new PrintDetector().detect(scan.image);
+    expect(prints).toHaveLength(1);
+    expect(cornerError(prints[0]!.quad, truth)).toBeLessThan(8);
+  });
+
+  it("copes with a strong lighting gradient across the album page", () => {
+    const scan = new SyntheticScan(1200, 900, [70, 60, 55]);
+    const truths = [
+      scan.addPrint({ cx: 300, cy: 300, w: 320, h: 240, angleDeg: 2, seed: 11 }),
+      scan.addPrint({ cx: 850, cy: 600, w: 360, h: 260, angleDeg: -4, seed: 12 }),
+    ];
+    scan.shade((x, y) => 0.45 + 0.9 * (x / 1200) * (0.6 + 0.4 * y / 900)); // dark left, bright right
     const prints = new PrintDetector().detect(scan.image);
     expect(prints).toHaveLength(2);
     prints.forEach((p, i) => expect(cornerError(p.quad, truths[i]!)).toBeLessThan(8));

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Split editor sandbox · Pixlixir (dev only)</title>
+    <link rel="stylesheet" href="/dist/base.css" />
+    <link rel="stylesheet" href="/dist/split.css" />
+    <!-- Dev-only: fakes the extension APIs and a Google Photos tab. Usage:
+         /tools/dev/editor-sandbox/?tab=1&email=dev@example.com&media=AF1QipSANDBOX0000000&img=/captures/your-scan.jpg -->
+    <script src="./chrome-stub.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/dist/split.js"></script>
+  </body>
+</html>

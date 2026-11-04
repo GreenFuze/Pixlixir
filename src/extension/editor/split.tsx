@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Point, Quad } from "../../imaging/geometry.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import type { SplitPrintRecord } from "../storage/job-store.js";
+import { FixPanel } from "./fix-view.js";
 import { SplitSession, type Snapshot } from "./split-session.js";
 
 const COLORS = ["#7b4dff", "#00a2ff", "#ff7a00", "#00b37e", "#ff3d7f", "#c2a600"];
@@ -124,6 +125,7 @@ function PrintCard(props: { session: SplitSession; snap: Snapshot; print: SplitP
           <div class="row">
             <button class="btn icon small" title="Rotate left" aria-label="Rotate left" disabled={busy} onClick={(e) => { e.stopPropagation(); session.rotate(print.id, -1); }}>⟲</button>
             <button class="btn icon small" title="Rotate right" aria-label="Rotate right" disabled={busy} onClick={(e) => { e.stopPropagation(); session.rotate(print.id, 1); }}>⟳</button>
+            <button class="btn small" title="Glare, lighting, colour, repairs" disabled={busy} onClick={(e) => { e.stopPropagation(); session.openFix(print.id); }}>Fix…</button>
             <label class="inc" onClick={(e) => e.stopPropagation()}>
               <input type="checkbox" checked={print.included} disabled={busy} onChange={() => session.toggleIncluded(print.id)} /> Include
             </label>
@@ -156,11 +158,15 @@ function App(props: { session: SplitSession }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (snap.fix) {
+        if (e.key === "Escape") session.closeFix();
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && snap.selectedId && phase.name === "ready") session.remove(snap.selectedId);
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [snap.selectedId, phase.name]);
+  }, [snap.selectedId, phase.name, snap.fix]);
 
   const pending = job?.prints.filter((p) => p.included && !p.saved) ?? [];
   const savedCount = job?.prints.filter((p) => p.saved).length ?? 0;
@@ -185,11 +191,19 @@ function App(props: { session: SplitSession }) {
             <QuadCanvas snap={snap} session={session} />
           </section>
           <aside>
-            {snap.resumed && <div class="note">Resumed your earlier split of this scan{savedCount > 0 ? ` (${savedCount} already saved)` : ""}.</div>}
+            {snap.resumed && <div class="note">Resumed your earlier split of this scan{snap.resumed.savedBefore > 0 ? ` (${snap.resumed.savedBefore} already saved)` : ""}.</div>}
             <div class="row between">
               <strong>{job.prints.length} photo{job.prints.length === 1 ? "" : "s"} found</strong>
               <button class="btn small" disabled={phase.name === "saving"} onClick={() => session.addPrint()}>+ Add photo</button>
             </div>
+            <div class="row between">
+              <span class="muted small">Sideways? Rotate all</span>
+              <span class="row">
+                <button class="btn icon small" title="Rotate all left" aria-label="Rotate all left" disabled={phase.name === "saving"} onClick={() => session.rotateAll(-1)}>⟲</button>
+                <button class="btn icon small" title="Rotate all right" aria-label="Rotate all right" disabled={phase.name === "saving"} onClick={() => session.rotateAll(1)}>⟳</button>
+              </span>
+            </div>
+            <div class="note">Auto-fix is on: colour{snap.lightingAvailable ? ", lighting" : ""}, glare hotspots and sharpening. Use <strong>Fix…</strong> on a photo to compare, adjust, or paint over glare and damage.</div>
             {job.prints.length === 0 && <p class="muted">No photos were detected. Use “Add photo” and drag the corners around each picture.</p>}
             <ul class="prints">
               {job.prints.map((p, i) => <PrintCard key={p.id} session={session} snap={snap} print={p} index={i} />)}
@@ -218,6 +232,12 @@ function App(props: { session: SplitSession }) {
           )}
         </footer>
       )}
+
+      {snap.fix && job && (() => {
+        const idx = job.prints.findIndex((p) => p.id === snap.fix!.printId);
+        const print = job.prints[idx];
+        return print ? <FixPanel session={session} fix={snap.fix} print={print} index={idx} lightingAvailable={snap.lightingAvailable} /> : null;
+      })()}
 
       {confirming && (
         <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-title">

@@ -14,7 +14,8 @@ library next to the original.
 | Feature | Status |
 |---|---|
 | Account detection, side panel, in-page launcher, selection tracking | ✅ built |
-| **Split into Photos**: auto-detect prints, adjust/add/remove/rotate, save as new items dated like the scan | ✅ built — protocol steps verified live, awaiting your end-to-end test |
+| **Split into Photos**: auto-detect prints (also on patterned cloth / album pages, with perspective), adjust/add/remove/rotate, save as new items dated like the scan | ✅ built — protocol steps verified live, awaiting your end-to-end test |
+| **Fix each photo** (Photomyne-style): colour restore (or keep original tones), lighting & shadow correction measured from the surface around the prints, glare reduction (auto hotspots + Glare brush), dust & scratches, Repair brush, Protect brush, sharpen, before/after | ✅ built — local processing, awaiting your test |
 | Download split results locally | ✅ built |
 | Restore, AI Studio, duplicates, metadata repair, panoramas, video, vault, agent API | 🗺️ planned — see [FEATURES.md](docs/roadmap/FEATURES.md) |
 
@@ -40,6 +41,7 @@ chip in the bottom-right corner. Step-by-step test: [MANUAL-TEST-split.md](docs/
 | `npm run typecheck` | Strict TypeScript |
 | `npm run check` | All of the above |
 | `npm run build:probe` | Build the live protocol probe ([tools/live-probe](tools/live-probe/probe.ts)) |
+| `npm run dev:split -- captures/<scan>.jpg` | Run detection + fixes on a local image and write debug images to `captures/debug/` (see [tools/dev](tools/dev/README.md)) |
 
 ## Docs
 

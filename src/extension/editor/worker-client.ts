@@ -1,9 +1,8 @@
 /** Promise-based client for split-worker.ts. Construct to spawn; dispose() to terminate. */
 
-import type { Quad } from "../../imaging/geometry.js";
 import type { DetectedPrint } from "../../imaging/split/detector.js";
 import { PixError } from "../../shared/errors.js";
-import type { WorkerRequest, WorkerResponse } from "./split-worker.js";
+import type { RenderRequest, RenderResult, WorkerRequest, WorkerResponse } from "./split-worker.js";
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -28,16 +27,16 @@ export class SplitWorkerClient {
     this.#pending.clear();
   }
 
-  load(bitmap: ImageBitmap): Promise<{ width: number; height: number }> {
-    return this.request({ op: "load", bitmap }, [bitmap]) as Promise<{ width: number; height: number }>;
+  load(bitmap: ImageBitmap): Promise<{ width: number; height: number; lightingAvailable: boolean }> {
+    return this.request({ op: "load", bitmap }, [bitmap]) as Promise<{ width: number; height: number; lightingAvailable: boolean }>;
   }
 
   detect(): Promise<DetectedPrint[]> {
     return this.request({ op: "detect" }) as Promise<DetectedPrint[]>;
   }
 
-  render(quad: Quad, rotation: number, preview: boolean): Promise<Blob> {
-    return this.request({ op: "render", quad, rotation, preview }) as Promise<Blob>;
+  render(req: RenderRequest): Promise<RenderResult> {
+    return this.request({ op: "render", ...req }) as Promise<RenderResult>;
   }
 
   private request(req: DistributiveOmit<WorkerRequest, "id">, transfer: Transferable[] = []): Promise<unknown> {

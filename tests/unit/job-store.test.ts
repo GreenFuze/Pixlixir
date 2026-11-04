@@ -2,10 +2,11 @@ import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
 import { JobStore, type SplitJob } from "../../src/extension/storage/job-store.js";
 import { SplitSession } from "../../src/extension/editor/split-session.js";
+import { AdjustmentPresets } from "../../src/imaging/enhance/adjustments.js";
 
 function job(id: string, status: SplitJob["status"], mediaKey = "AF1QipSOURCE00000000"): SplitJob {
   const quad = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }] as SplitJob["prints"][number]["quad"];
-  return { id, kind: "split", accountEmail: "a@b.com", sourceMediaKey: mediaKey, sourceFileName: "scan.jpg", sourceWidth: 100, sourceHeight: 100, status, prints: [{ id: "p1", quad, rotation: 0, included: true, confidence: 1, saved: null, error: null }], createdAt: 1, updatedAt: 1 };
+  return { id, kind: "split", accountEmail: "a@b.com", sourceMediaKey: mediaKey, sourceFileName: "scan.jpg", sourceWidth: 100, sourceHeight: 100, status, prints: [{ id: "p1", quad, rotation: 0, included: true, confidence: 1, adjustments: AdjustmentPresets.auto(), saved: null, error: null }], createdAt: 1, updatedAt: 1 };
 }
 
 describe("JobStore", () => {
@@ -18,6 +19,11 @@ describe("JobStore", () => {
     expect(await store.latestOpenForSource("other@b.com", "AF1QipSOURCE00000000")).toBeNull();
     expect((await store.recent(10)).map((j) => j.id)).toEqual(["open", "done"]);
     await expect(store.get("missing")).rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+    // v0.1 records without adjustments are upgraded on read.
+    const legacy = job("legacy", "editing", "AF1QipLEGACY0000000");
+    delete (legacy.prints[0] as Partial<typeof legacy.prints[0]>).adjustments;
+    await store.put(legacy);
+    expect((await store.get("legacy")).prints[0]!.adjustments).toEqual(AdjustmentPresets.auto());
     store.close();
   });
 });

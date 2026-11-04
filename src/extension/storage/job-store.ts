@@ -5,6 +5,7 @@
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { AdjustmentPresets, type Adjustments } from "../../imaging/enhance/adjustments.js";
 import type { Quad } from "../../imaging/geometry.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 
@@ -17,6 +18,8 @@ export interface SplitPrintRecord {
   rotation: number;
   included: boolean;
   confidence: number | null;
+  /** Fixes applied to this photo (auto defaults, user tweaks and brush strokes). */
+  adjustments: Adjustments;
   saved: { mediaKey: string; webUrl: string; fileName: string } | null;
   error: SerializedError | null;
 }
@@ -73,14 +76,19 @@ export class JobStore {
   async get(id: string): Promise<SplitJob> {
     const job = await this.db.get("jobs", id);
     if (!job) throw new PixError(ErrorCode.JobNotFound, `Job ${id} not found`, { id });
-    return job;
+    return JobStore.upgrade(job);
+  }
+
+  /** Jobs written by v0.1 have no per-photo adjustments: give them the auto defaults. */
+  static upgrade(job: SplitJob): SplitJob {
+    return { ...job, prints: job.prints.map((p) => ((p as Partial<SplitPrintRecord>).adjustments ? p : { ...p, adjustments: AdjustmentPresets.auto() })) };
   }
 
   /** Most recent unfinished job for a source item, so the editor can resume it. */
   async latestOpenForSource(accountEmail: string, mediaKey: string): Promise<SplitJob | null> {
     const all = await this.db.getAllFromIndex("jobs", "bySource", [accountEmail, mediaKey]);
     const open = all.filter((j) => j.status !== "done").sort((a, b) => b.updatedAt - a.updatedAt);
-    return open[0] ?? null;
+    return open[0] ? JobStore.upgrade(open[0]) : null;
   }
 
   async recent(limit: number): Promise<SplitJob[]> {

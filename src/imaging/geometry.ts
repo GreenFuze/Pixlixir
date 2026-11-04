@@ -78,18 +78,60 @@ export class Geometry {
     return best;
   }
 
-  /** Orders 4 points as TL, TR, BR, BL (by angle around the centroid, starting top-left). */
+  /**
+   * Small enclosing quadrilateral of a convex hull: greedily removes the hull
+   * edge whose removal (extending both neighbouring edges to their
+   * intersection) adds the least area, until 4 vertices remain. Unlike a
+   * rectangle this follows perspective-distorted prints, and like the
+   * rectangle it always contains the whole hull. Returns null if the hull
+   * cannot be reduced (e.g. parallel neighbouring edges everywhere).
+   */
+  static enclosingQuad(hull: readonly Point[]): Quad | null {
+    if (hull.length < 4) return null;
+    const poly = hull.map((p) => ({ ...p }));
+    while (poly.length > 4) {
+      // Paragraph: find the cheapest edge to eliminate.
+      const n = poly.length;
+      let best = -1, bestArea = Infinity, bestPoint: Point | null = null;
+      for (let i = 0; i < n; i++) {
+        const a = poly[(i - 1 + n) % n]!, b = poly[i]!, c = poly[(i + 1) % n]!, d = poly[(i + 2) % n]!;
+        const x = Geometry.lineIntersection(a, b, d, c);
+        if (!x) continue;
+        // The intersection must lie forward of b (along a→b) and forward of c (along d→c).
+        if ((x.x - b.x) * (b.x - a.x) + (x.y - b.y) * (b.y - a.y) < -1e-9) continue;
+        if ((x.x - c.x) * (c.x - d.x) + (x.y - c.y) * (c.y - d.y) < -1e-9) continue;
+        const added = Math.abs((c.x - b.x) * (x.y - b.y) - (x.x - b.x) * (c.y - b.y)) / 2;
+        if (added < bestArea) { bestArea = added; best = i; bestPoint = x; }
+      }
+      if (best < 0 || !bestPoint) return null;
+
+      // Paragraph: replace edge (best, best+1) with the intersection point.
+      const next = (best + 1) % n;
+      poly[best] = bestPoint;
+      poly.splice(next, 1);
+    }
+    return Geometry.orderCorners(poly);
+  }
+
+  /** Intersection of infinite lines (p1,p2) and (p3,p4), or null when parallel. */
+  static lineIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point | null {
+    const d = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(d) < 1e-12) return null;
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / d;
+    return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+  }
+
+  /** Orders 4 points clockwise (screen coordinates) starting at the top-left-most corner (min x+y). */
   static orderCorners(pts: readonly Point[]): Quad {
     if (pts.length !== 4) throw new PixError(ErrorCode.InvalidGeometry, "orderCorners needs exactly 4 points", { count: pts.length });
     const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
     const cy = pts.reduce((s, p) => s + p.y, 0) / 4;
-    // Sort clockwise (screen coords, y down) starting from angle -135° (top-left).
-    const angle = (p: Point) => {
-      const a = Math.atan2(p.y - cy, p.x - cx);
-      return (a + Math.PI * 2 + Math.PI * 0.75) % (Math.PI * 2);
-    };
-    const sorted = [...pts].sort((p, q) => angle(p) - angle(q));
-    return [sorted[0]!, sorted[1]!, sorted[2]!, sorted[3]!].map((p) => ({ x: p.x, y: p.y })) as Quad;
+    const clockwise = [...pts].sort((p, q) => Math.atan2(p.y - cy, p.x - cx) - Math.atan2(q.y - cy, q.x - cx));
+    let start = 0;
+    clockwise.forEach((p, i) => {
+      if (p.x + p.y < clockwise[start]!.x + clockwise[start]!.y) start = i;
+    });
+    return [0, 1, 2, 3].map((k) => ({ ...clockwise[(start + k) % 4]! })) as Quad;
   }
 
   /** Output size for rectifying a quad: max opposite-edge lengths. */

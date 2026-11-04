@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "check": "npm run typecheck && npm run test && npm run build",
-    "build:probe": "esbuild tools/live-probe/probe.ts --bundle --format=iife --target=chrome116 --outfile=dist-probe/probe.js"
+    "build:probe": "esbuild tools/live-probe/probe.ts --bundle --format=iife --target=chrome116 --outfile=dist-probe/probe.js",
+    "dev:split": "esbuild tools/dev/split-debug.ts --bundle --platform=node --format=esm --outfile=captures/.bin/split-debug.mjs --log-level=warning && node captures/.bin/split-debug.mjs"
   },
   "dependencies": {
     "idb": "^8.0.4",
@@ -24,6 +25,7 @@
     "esbuild": "^0.28.2",
     "fake-indexeddb": "^6.2.7",
     "happy-dom": "^21.0.4",
+    "jpeg-js": "^0.4.4",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }
