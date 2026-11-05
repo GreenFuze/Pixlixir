@@ -44,6 +44,10 @@ export const ErrorCode = {
   // Dates
   DateNotApplied: "DATE_NOT_APPLIED",
 
+  // Trash
+  TrashNotApplied: "TRASH_NOT_APPLIED",
+  OriginalsKept: "ORIGINALS_KEPT",
+
   // Generic
   Cancelled: "CANCELLED",
   Internal: "INTERNAL",

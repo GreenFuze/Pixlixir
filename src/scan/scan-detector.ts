@@ -7,7 +7,7 @@
 import type { LibraryItem } from "../domain/types.js";
 import { ErrorCode, type PixError, type SerializedError } from "../shared/errors.js";
 
-export type DetectorId = "panorama" | "dates";
+export type DetectorId = "panorama" | "dates" | "duplicates";
 
 export interface ScanFinding {
   /** Stable within one scan. */

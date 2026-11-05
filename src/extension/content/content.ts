@@ -90,6 +90,11 @@ class ContentApp {
       case "photos.setDates":
         await adapter.setDates(msg.changes);
         return null;
+      case "photos.moveToTrash":
+        await adapter.moveToTrash(msg.dedupKeys);
+        return null;
+      case "photos.listTrash":
+        return adapter.listTrash(msg.page);
       case "photos.thumbnail": {
         const { bytes, mimeType } = await adapter.fetchThumbnail(msg.baseUrl, msg.maxSide);
         return { bytesBase64: Base64.encode(bytes), mimeType };

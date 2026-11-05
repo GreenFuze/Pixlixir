@@ -17,10 +17,10 @@ export const LIVE_CAPABILITIES: readonly Capability[] = [
   { id: "album.list", label: "List albums and album items", status: "live-verified", verifiedOn: "2026-11-05", notes: "Z5xsfc, snAcKc (album item keys differ from library keys; dedup keys match)." },
   { id: "library.upload", label: "Upload new item", status: "live-verified", verifiedOn: "2026-11-04", notes: "Resumable upload + mdpdU commit; verified with tools/live-probe (synthetic image, then trashed)." },
   { id: "item.setDate", label: "Set capture date", status: "live-verified", verifiedOn: "2026-11-04", notes: "DaSgWe (seconds); read back exactly via VrseUb in tools/live-probe." },
-  { id: "item.bulkInfo", label: "Read file names and dates in bulk", status: "live-verified", verifiedOn: "2026-11-05", notes: "EWgK9e: 2,567 library items, and album item keys (read-only)." },
+  { id: "item.bulkInfo", label: "Read file names, dates and sizes in bulk", status: "live-verified", verifiedOn: "2026-11-05", notes: "EWgK9e: 2,567 library items, and album item keys (read-only). Size [1][9] equals fDcn4b [0][5] on 10 of 10." },
   { id: "item.replaceInPlace", label: "Replace content in place", status: "research", verifiedOn: null, notes: "No evidence that the web app supports this." },
   { id: "album.add", label: "Add items to an album", status: "live-verified", verifiedOn: "2026-11-05", notes: "E1Cajb for own albums (synthetic probe). Shared albums use laUYf: implemented, not live-verified." },
   { id: "item.setDescription", label: "Set description", status: "live-verified", verifiedOn: "2026-11-05", notes: "AQNOFd, read back via fDcn4b (synthetic probe)." },
   { id: "item.locationOnUpload", label: "Location of new uploads", status: "live-verified", verifiedOn: "2026-11-05", notes: "EXIF GPS in the uploaded JPEG becomes the item's location immediately." },
-  { id: "item.trash", label: "Move to trash", status: "research", verifiedOn: null, notes: "XwAOJf per GPTK; intentionally not implemented in this phase." },
+  { id: "item.trash", label: "Move to trash", status: "live-verified", verifiedOn: "2026-11-05", notes: "XwAOJf with synthetic probe items; zy0IHe listing shape read live. Through the extension itself: not yet verified live." },
 ];

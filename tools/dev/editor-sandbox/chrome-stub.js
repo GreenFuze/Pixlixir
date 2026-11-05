@@ -26,6 +26,9 @@
     ...[1, 2, 3, 4, 5, 6].map((i) => entry(`budapest${i}`, `/captures/pano/budapest${i}.jpg`, T + 3600_000 + i * 3000, 1500, 1000)),
     ...[1, 2, 3, 4].map((i) => entry(`newspaper${i}`, `/captures/pano/newspaper${i}.jpg`, T + 7200_000 + i * 4000, 1500, 2000)),
     entry("prints", "/captures/sample-3prints.jpg", T + 9000_000, 3000, 2000),
+    // The same picture again: a smaller copy days later, and a third.
+    entry("boatcopya", "/captures/pano/boat1.jpg", T + 5 * 86_400_000, 1000, 750),
+    entry("boatcopyb", "/captures/pano/boat1.jpg", T + 9 * 86_400_000, 1600, 1200),
   ].sort((a, b) => b.takenAtMs - a.takenAtMs);
   const byKey = new Map(library.map((i) => [i.mediaKey, i]));
   const albums = [{ mediaKey: "AF1QipSANDBOXALBUMBOAT", title: "Boat trip", shared: false }];
@@ -36,6 +39,7 @@
   const page = (all, token) => { const start = token ? Number(token) : 0; return { items: all.slice(start, start + PAGE), next: start + PAGE < all.length ? String(start + PAGE) : null }; };
 
   const sandboxDates = new Map();
+  const sandboxTrash = new Set();
 
   async function thumbnail(file, side) {
     const blob = await (await fetch(file)).blob();
@@ -85,9 +89,11 @@
         if (!item) return [];
         const n = item.file.split("/").pop();
         const changed = sandboxDates.get(item.dedupKey);
-        return [{ mediaKey: k, fileName: /budapest/.test(n) ? n.replace(/budapest(\d)\.jpg/, "IMG-20190512-WA000$1.jpg") : n, takenAtMs: changed?.takenAtMs ?? item.takenAtMs, timezoneOffsetMs: changed?.timezoneOffsetMs ?? item.timezoneOffsetMs }];
+        return [{ mediaKey: k, fileName: /budapest/.test(n) ? n.replace(/budapest(\d)\.jpg/, "IMG-20190512-WA000$1.jpg") : n, sizeBytes: 2_000_000, takenAtMs: changed?.takenAtMs ?? item.takenAtMs, timezoneOffsetMs: changed?.timezoneOffsetMs ?? item.timezoneOffsetMs }];
       }));
     }
+    if (msg.type === "photos.moveToTrash") { for (const k of msg.dedupKeys) sandboxTrash.add(k); return ok(null); }
+    if (msg.type === "photos.listTrash") return ok({ items: [...sandboxTrash], next: null });
     if (msg.type === "photos.setDates") { for (const c of msg.changes) sandboxDates.set(c.dedupKey, c); return ok(null); }
 
     // Paragraph: writes go to in-page records only.
@@ -106,7 +112,7 @@
 
   // Paragraph: session storage holds a pretend selection (all newspaper shots + the lone photo) under id "sandbox".
   const accountEmail = params.get("email");
-  const plan = (scope) => ({ accountEmail, plan: { scope, detectors: { panorama: true, dates: true }, recheck: false } });
+  const plan = (scope) => ({ accountEmail, plan: { scope, detectors: { panorama: true, dates: true, duplicates: true }, recheck: false } });
   const session = { "pixlixir.scanSelection.sandbox": plan({ kind: "selection", mediaKeys: library.filter((i) => /newspaper|prints/.test(i.file)).map((i) => i.mediaKey) }), "pixlixir.scanSelection.none": plan({ kind: "library" }) };
 
   window.chrome = {

@@ -23,6 +23,9 @@ You need 2–40 overlapping photos in your library, e.g. a landscape shot turnin
    "Building the full-size panorama…" → "Uploading…" → **Saved to Google Photos** + "Open in Google Photos ↗".
 9. Open it: it is a new item, full size, dated like the earliest photo (if that option was on). The source photos are unchanged.
 10. Side panel → **Recent work** lists "Panorama of N photos" with a link.
+11. Only with test photos: **Trash originals** → the dialog names your account, the panorama's size and what happens →
+    **Cancel** changes nothing → again → **Move to trash**. Expect **Originals in trash**. In Google Photos' Trash,
+    the photos in the panorama are there, those left out of it are not, and the panorama is still in the library.
 
 Known limits: no manual control points yet (C-02); very wide 360° wrap-around is untested;
 edge fill is classical inpainting (smears detail); videos and HEIC files Chrome cannot decode

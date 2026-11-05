@@ -4,7 +4,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { Edges, Motion, Projection, Straighten } from "../../../imaging/panorama/stitch-runtime.js";
 import { ErrorBox, Segmented, useSnapshot } from "../editor-ui.js";
 import { PanoramaSession, type PanoramaQuality, type PanoramaSnapshot, type PanoramaSource } from "./panorama-session.js";
-import { InheritanceList } from "./panorama-ui.js";
+import { InheritanceList, TrashOriginalsDialog } from "./panorama-ui.js";
 
 const PROJECTIONS: { value: Projection; label: string; hint: string }[] = [
   { value: "spherical", label: "Spherical", hint: "Best default: wide and multi-row panoramas, up to 360°." },
@@ -94,6 +94,7 @@ export function PanoramaEditor(props: { session: PanoramaSession; back: EditorBa
   const [copyDescription, setCopyDescription] = useState(true);
   const draft = snap.saveDraft;
   const [showFill, setShowFill] = useState(true);
+  const [confirmingTrash, setConfirmingTrash] = useState(false);
   const { phase, settings, preview: p, params } = snap;
   const editable = phase.name === "ready";
   const estimate = session.estimatedOutput();
@@ -204,11 +205,27 @@ export function PanoramaEditor(props: { session: PanoramaSession; back: EditorBa
               {snap.published && snap.published.albumsAdded.length > 0 && <span class="muted small">Added to {snap.published.albumsAdded.length} album{snap.published.albumsAdded.length > 1 ? "s" : ""}</span>}
               {snap.published?.problems.map((pr, i) => <span key={i} class="err">{pr.message}</span>)}
               <a href={snap.job.saved.webUrl} target="_blank" rel="noreferrer">Open in Google Photos ↗</a>
+              {snap.originals.error && <ErrorBox error={snap.originals.error} />}
+              {snap.job.originalsTrash?.state === "moved"
+                ? <span class="pill">Originals in trash</span>
+                : session.trashablePhotos() > 0 && <button class="btn danger" disabled={snap.originals.moving} title="Move the photos in this panorama to Google Photos’ trash" onClick={() => setConfirmingTrash(true)}>{snap.originals.moving ? "Moving…" : "Trash originals"}</button>}
             </span>
           ) : (
             <button class="btn primary" disabled={!p || snap.previewBusy} onClick={() => void session.prepareSave()}>Save to Google Photos</button>
           )}
         </footer>
+      )}
+
+      {confirmingTrash && snap.job?.saved && (
+        <TrashOriginalsDialog
+          photos={session.trashablePhotos()}
+          email={params.email}
+          size={snap.job.saved}
+          staying={snap.sources.length - session.trashablePhotos() - (snap.job.originalsTrash?.moved.length ?? 0)}
+          problems={snap.published?.problems.length ?? 0}
+          onCancel={() => setConfirmingTrash(false)}
+          onConfirm={() => { setConfirmingTrash(false); void session.trashOriginals(); }}
+        />
       )}
 
       {draft && (

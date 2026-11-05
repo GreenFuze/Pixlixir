@@ -155,6 +155,14 @@ function App(props: { model: PanelModel }) {
                   </li>
                 );
               }
+              if (j.kind === "duplicateTrash") {
+                return (
+                  <li key={j.id}>
+                    <div>Duplicates moved to trash</div>
+                    <div class="muted small">{j.moved.length}/{j.dedupKeys.length} · {status}</div>
+                  </li>
+                );
+              }
               const saved = j.prints.filter((p) => p.saved).length;
               return (
                 <li key={j.id}>

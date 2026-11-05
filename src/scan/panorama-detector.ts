@@ -119,6 +119,20 @@ export interface PanoramaCandidate extends ScanFinding {
   alreadyMade: { webUrl: string } | null;
 }
 
+/**
+ * How many engines a scan runs at once. Each is a whole Python runtime (about 350 MB), so this is
+ * bounded by cores and memory. Measured in ADR-0006: 8 engines take a quarter of the time of 1.
+ */
+export class ScanConcurrency {
+  static readonly MAX_ENGINES = 8;
+
+  static engines(cores: number, memoryGb: number | undefined): number {
+    const byCores = Math.max(1, Math.floor(cores / 2));
+    const byMemory = memoryGb === undefined ? 2 : Math.max(1, Math.floor(memoryGb / 4));
+    return Math.min(ScanConcurrency.MAX_ENGINES, byCores, byMemory);
+  }
+}
+
 export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
   readonly id = "panorama" as const;
   readonly label = "Panoramas";
@@ -129,15 +143,21 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
   /** This many failures in a row means something systemic: stop instead of failing on every sequence. */
   static readonly MAX_FAILURES_IN_A_ROW = 5;
 
+  readonly #checkers: readonly OverlapChecker[];
+
   constructor(
-    private readonly checker: OverlapChecker,
+    /** One per engine: sequences are checked side by side. */
+    checkers: OverlapChecker | readonly OverlapChecker[],
     /** Gets the group's items (album listings use album-specific keys; dedup keys are stable everywhere). */
     private readonly alreadyMade: (items: readonly LibraryItem[]) => { webUrl: string } | null,
     private readonly cache: ScanCache<SavedSequence>,
     /** Ignore saved results and check every photo again. */
     private readonly recheck: boolean = false,
     private readonly options: SequenceOptions = TimeSequenceGrouper.DEFAULTS,
-  ) {}
+  ) {
+    this.#checkers = [checkers].flat() as OverlapChecker[];
+    if (this.#checkers.length === 0) throw new PixError(ErrorCode.Internal, "A panorama scan needs at least one checker");
+  }
 
   static signature(sequence: readonly LibraryItem[]): string {
     return `v${PanoramaDetector.RESULT_VERSION}|${sequence.map((i) => i.dedupKey).join(",")}`;
@@ -164,22 +184,37 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
 
     // Paragraph: check the rest with the stitching engine; progress counts photos, not sequences.
     const total = pending.reduce((n, s) => n + s.length, 0);
+    const inProgress = new Map<LibraryItem[], number>();
+    const report = () => ctx.progress("Checking new photos", stats.photosChecked + [...inProgress.values()].reduce((a, b) => a + b, 0), total);
     let inARow = 0;
-    for (const sequence of pending) {
-      const start = stats.photosChecked;
-      ctx.progress("Checking new photos", start, total);
-      try {
-        const groups = await this.checker.check(sequence, ctx.signal, (f) => ctx.progress("Checking new photos", start + Math.floor(f * sequence.length), total));
-        for (const g of groups) this.emitGroup(g, byKey, emit);
-        await this.cache.put(PanoramaDetector.signature(sequence), PanoramaDetector.toSaved(groups, byKey));
-        inARow = 0;
-      } catch (err) {
-        const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.StitchFailed, "Could not check a sequence of photos");
-        if (ScanFailures.stopsTheScan(e) || ++inARow >= PanoramaDetector.MAX_FAILURES_IN_A_ROW) throw e;
-        stats.failures.push(e.toJSON());
+    let next = 0;
+    const stop: { error: PixError | null } = { error: null };
+
+    // Paragraph: each engine takes the next sequence when free. Every finished sequence is saved at once.
+    const work = async (checker: OverlapChecker) => {
+      while (stop.error === null && next < pending.length) {
+        const sequence = pending[next++]!;
+        inProgress.set(sequence, 0);
+        report();
+        try {
+          const groups = await checker.check(sequence, ctx.signal, (f) => {
+            inProgress.set(sequence, Math.floor(f * sequence.length));
+            report();
+          });
+          for (const g of groups) this.emitGroup(g, byKey, emit);
+          await this.cache.put(PanoramaDetector.signature(sequence), PanoramaDetector.toSaved(groups, byKey));
+          inARow = 0;
+        } catch (err) {
+          const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.StitchFailed, "Could not check a sequence of photos");
+          if (ScanFailures.stopsTheScan(e) || ++inARow >= PanoramaDetector.MAX_FAILURES_IN_A_ROW) stop.error ??= e;
+          else stats.failures.push(e.toJSON());
+        }
+        inProgress.delete(sequence);
+        stats.photosChecked += sequence.length;
       }
-      stats.photosChecked += sequence.length;
-    }
+    };
+    await Promise.all(this.#checkers.map(work));
+    if (stop.error) throw stop.error;
     ctx.progress("Checking new photos", total, total);
     return stats;
   }

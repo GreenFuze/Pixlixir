@@ -14,6 +14,30 @@ export class PanoramaFormat {
   }
 }
 
+/** Confirms moving the originals of saved panoramas to trash. Google's Trash keeps them; nothing is deleted here. */
+export function TrashOriginalsDialog(props: { photos: number; email: string; size: { width: number; height: number } | null; staying: number; problems: number; onCancel: () => void; onConfirm: () => void }) {
+  const { photos, email, size, staying, problems } = props;
+  return (
+    <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+      <div class="modal card">
+        <h2 id="trash-title">Move {photos.toLocaleString()} original{photos === 1 ? "" : "s"} to trash?</h2>
+        <p>From <strong>{email}</strong>. The panorama stays{size ? ` (${size.width.toLocaleString()} × ${size.height.toLocaleString()} px)` : ""}.</p>
+        <ul class="inherit small">
+          <li>They also leave their albums, and phones with backup on.</li>
+          <li>Google keeps them in Trash for 60 days (30 if not backed up), then deletes them.</li>
+          <li>Anything cropped from the panorama’s edges is only in these photos.</li>
+          {staying > 0 && <li>{staying.toLocaleString()} other photo{staying === 1 ? "" : "s"} stay{staying === 1 ? "s" : ""}: not in the panorama, or not yours.</li>}
+        </ul>
+        {problems > 0 && <div class="row"><span class="pill danger">Some details were not copied to the panorama</span></div>}
+        <div class="row end">
+          <button class="btn" autofocus onClick={props.onCancel}>Cancel</button>
+          <button class="btn danger" onClick={props.onConfirm}>Move to trash</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** What a saved panorama takes over from its photos, as a checklist the user can see before saving. */
 export function InheritanceList(props: { inherited: InheritedMetadata; matchDate: boolean; addToAlbums: boolean; copyDescription: boolean }) {
   const { inherited: m, matchDate, addToAlbums, copyDescription } = props;

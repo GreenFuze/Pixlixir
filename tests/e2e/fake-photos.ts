@@ -26,6 +26,12 @@ export class FakePhotos {
   readonly uploads: { fileName: string; bytes: Buffer }[] = [];
   readonly calls: { rpc: string; payload: unknown }[] = [];
   readonly refuseDates = new Set<string>();
+  /** Dedup keys in the trash; they leave the timeline, like the live call. */
+  readonly trashed = new Set<string>();
+  /** Dedup keys the trash call quietly ignores, to test the read-back. */
+  readonly refuseTrash = new Set<string>();
+  /** Uploaded items stop being found, to test that originals stay when the panorama cannot be confirmed. */
+  loseUploads = false;
   #pending: { fileName: string } | null = null;
 
   constructor(private readonly photos: FakePhoto[]) {}
@@ -89,18 +95,29 @@ export class FakePhotos {
     return `<div><a href="/photo/${p.mediaKey}" aria-label="Photo"></a><div role="checkbox" aria-checked="false" data-key="${p.mediaKey}"></div></div>`;
   }
 
+  private uploaded(key: unknown): FakePhoto | undefined {
+    if (this.loseUploads || typeof key !== "string" || !key.startsWith("AF1QipUPLOADED")) return undefined;
+    return { mediaKey: key, dedupKey: `dedup${key}`, takenAtMs: 0, jpeg: Buffer.alloc(0), width: 100, height: 100 };
+  }
+
   private row(p: FakePhoto): unknown[] {
     return [p.mediaKey, [`https://photos.fife.usercontent.google.com/pw/fake/${p.mediaKey}`, p.width, p.height], p.takenAtMs, p.dedupKey, 7_200_000, p.takenAtMs, null, [[1]], 0, null, null, null, { "129168200": [[null], [[488584000, 22945000], null, null, true, [], 1]] }];
   }
 
   private answer(rpc: string, payload: unknown): unknown {
     const key = (payload as unknown[])[0] as string;
-    const photo = this.photos.find((p) => p.mediaKey === key);
+    const photo = this.photos.find((p) => p.mediaKey === key) ?? this.uploaded(key);
     switch (rpc) {
       case "lcxiM":
-        return [[...this.photos].sort((a, b) => b.takenAtMs - a.takenAtMs).map((p) => this.row(p)), null, "0"];
+        return [[...this.photos].filter((p) => !this.trashed.has(p.dedupKey)).sort((a, b) => b.takenAtMs - a.takenAtMs).map((p) => this.row(p)), null, "0"];
       case "VrseUb":
-        return [this.row(photo!)];
+        return photo ? [this.row(photo)] : [];
+      case "XwAOJf":
+        for (const dedup of (payload as [null, number, string[], number])[2]) if (!this.refuseTrash.has(dedup)) this.trashed.add(dedup);
+        return [];
+      case "zy0IHe":
+        // Live shape (2026-11-05): [rows], with [3] the dedup key and no second element on the last page.
+        return [this.photos.filter((p) => this.trashed.has(p.dedupKey)).map((p) => this.row(p).slice(0, 8))];
       case "fDcn4b": {
         const e: unknown[] = new Array(33).fill(null);
         e[0] = photo!.mediaKey;
@@ -120,7 +137,7 @@ export class FakePhotos {
         const keys = ((payload as unknown[][][][])[0]![0]![0] as unknown as string[][]).map((k) => k[0]!);
         return [[null, keys.flatMap((k) => {
           const p = this.photos.find((x) => x.mediaKey === k);
-          return p ? [[k, [null, null, "", p.fileName ?? `${k}.jpg`, null, null, p.takenAtMs, 7_200_000, 0], null, null, null, null]] : [];
+          return p ? [[k, [null, null, "", p.fileName ?? `${k}.jpg`, null, null, p.takenAtMs, 7_200_000, 0, p.jpeg.length], null, null, null, null]] : [];
         })]];
       }
       case "DaSgWe":

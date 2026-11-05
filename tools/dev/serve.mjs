@@ -1,7 +1,7 @@
 // Dev-only static server for the editor sandboxes. Serves the repo root on 127.0.0.1 with the
 // SAME Content-Security-Policy as the extension pages (manifest.json), so CSP problems
 // (e.g. WebAssembly in the panorama worker) show up here before they reach Chrome.
-// Usage: node tools/dev/serve.mjs [port]
+// Usage: node tools/dev/serve.mjs [port] [build folder served as /dist, e.g. dist-dev]
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -14,8 +14,9 @@ class DevServer {
     ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
   };
 
-  constructor(root, port, csp) {
+  constructor(root, port, csp, build = "dist") {
     this.root = path.resolve(root);
+    this.build = build;
     this.port = port;
     this.csp = csp;
   }
@@ -27,7 +28,8 @@ class DevServer {
   async handle(req, res) {
     // Paragraph: resolve the path safely inside the root.
     const url = new URL(req.url ?? "/", "http://localhost");
-    let file = path.resolve(this.root, "." + decodeURIComponent(url.pathname));
+    const wanted = decodeURIComponent(url.pathname).replace(/^\/dist\//, `/${this.build}/`);
+    let file = path.resolve(this.root, "." + wanted);
     if (!file.startsWith(this.root)) return this.fail(res, 403, "outside root");
     try {
       if ((await stat(file)).isDirectory()) file = path.join(file, "index.html");
@@ -48,4 +50,4 @@ class DevServer {
 }
 
 const manifest = JSON.parse(await readFile("src/extension/manifest.json", "utf8"));
-new DevServer(".", Number(process.argv[2] ?? 5174), manifest.content_security_policy.extension_pages).start();
+new DevServer(".", Number(process.argv[2] ?? 5174), manifest.content_security_policy.extension_pages, process.argv[3]).start();

@@ -59,7 +59,7 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | G-10 | Set date/time | 4 | live-verified |
 | G-11 | Set location — new uploads: EXIF GPS is read by Google immediately (live-verified); changing an existing item's location (`EtUHOe`) still research | 4 | implemented |
 | G-12 | Set description — `AQNOFd`, read back via `fDcn4b` | 4 | live-verified |
-| G-13 | Trash / restore from trash | 4 | research |
+| G-13 | Trash (implemented: read back in the trash listing). Restore from trash: research | 4 | wip |
 | G-14 | Replace image content in place (no new item) | 4 | research |
 | G-15 | Shared albums / partner sharing coverage | 4 | research |
 | G-16 | Locked Folder interaction | 6 | research |
@@ -132,7 +132,7 @@ offers a review and a bulk action. New checks are added as detectors.
 | L-01 | **Bulk operations** in the side panel: scope = date range, album, selection or whole library, and what to look for. Runs in a modal over Google Photos: progress bar with time left, minimize to the chip; findings stream in; review, select, bulk action, results + recent work | 4 | implemented |
 | L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart that overlap partially, agree once aligned and show clearly more than one photo (bursts rejected); only groups and photos that stitch are shown; preview and in-modal editor per group; "already made" recognised | 4 | implemented |
 | L-03 | Detector: **wrong dates from file names** implemented (M-01); time zones and missing location (M-03) todo | 4 | partial |
-| L-04 | Detector: duplicates / near-duplicates (D section) | 4 | todo |
+| L-04 | Detector: **duplicates by looks** with a similarity the user chooses (ADR-0008) | 4 | implemented |
 | L-05 | Detector: album-page scans to split (R-01), HDR / focus brackets (C-04, C-05) | 4 | todo |
 | L-06 | **Incremental scans**: results saved per photo sequence on this computer; later scans show them at once and only check new or changed sequences; a stopped scan resumes the same way; "Re-check all" ignores them | 4 | implemented |
 | L-07 | Incremental listing (today the scope is listed again each time; only the analysis is skipped) | 4 | todo |
@@ -179,14 +179,14 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| D-01 | Exact duplicates (content hash on original bytes only) | 3 | todo |
-| D-02 | Near-duplicates (perceptual hash, embeddings, metadata) — never labeled identical | 3 | todo |
+| D-01 | Same picture at 100%: identical after scaling to one size, compared at thumbnail size (not a byte match) | 3 | implemented |
+| D-02 | Image-based de-dup with a similarity the user chooses (Google Photos has none) — hashes find candidates, pixels check them | 3 | implemented |
 | D-03 | Staged pipeline: candidates → light check → detailed → full-res verify | 3 | todo |
-| D-04 | Best-copy recommendation with explanation | 3 | todo |
-| D-05 | Library hygiene: blurry, bad exposure, screenshots, repeated downloads, large videos, bursts | 4 | todo |
+| D-04 | Best copy selected automatically (highest resolution, then file size, then location), with the reason shown | 3 | implemented |
+| D-05 | Library hygiene: blurry, bad exposure, screenshots, repeated downloads, large videos. Not bursts: Google Photos already stacks them | 4 | todo |
 | D-06 | Cross-account duplicate detection (authorized accounts only) | 6 | research |
 | D-07 | Storage-savings estimate (labeled estimate unless verified) | 4 | todo |
-| D-08 | Safe bulk ops: preview, edit keep-set, exclude groups, batches, pause/resume, results | 4 | todo |
+| D-08 | Safe bulk ops: preview, edit keep-set, batches and results implemented; exclude groups, pause/resume todo | 4 | wip |
 
 ## M — Metadata Repair
 

@@ -6,7 +6,7 @@ import { ListingParser } from "../../src/gphotos/protocol/rpcs.js";
 import { LibraryCatalog, type CatalogSource } from "../../src/scan/library-catalog.js";
 import { LibraryScanner } from "../../src/scan/library-scanner.js";
 import { CONTENT_URL } from "../../src/gphotos/adapter.js";
-import { PanoramaDetector, TimeSequenceGrouper, type OverlapChecker, type OverlapGroup, type PanoramaCandidate, type SavedSequence, PanoramaPlausibility } from "../../src/scan/panorama-detector.js";
+import { PanoramaDetector, ScanConcurrency, TimeSequenceGrouper, type OverlapChecker, type OverlapGroup, type PanoramaCandidate, type SavedSequence, PanoramaPlausibility } from "../../src/scan/panorama-detector.js";
 import type { ScanCache } from "../../src/scan/scan-cache.js";
 import { ScanScopes } from "../../src/scan/scan-scope.js";
 import { ErrorCode, PixError } from "../../src/shared/errors.js";
@@ -216,6 +216,80 @@ describe("PanoramaDetector saved results", () => {
     const repeated = run(ErrorCode.MediaFetchFailed, 20);
     await expect(repeated.promise).rejects.toMatchObject({ code: ErrorCode.MediaFetchFailed });
     expect(repeated.checks()).toBe(PanoramaDetector.MAX_FAILURES_IN_A_ROW);
+  });
+});
+
+describe("PanoramaDetector with several engines", () => {
+  const none = () => null;
+  const sequence = (start: number) => [item(start, start * 100), item(start + 1, start * 100 + 3)];
+  const library = [...sequence(1), ...sequence(10), ...sequence(20), ...sequence(30), ...sequence(40)];
+  const ctx = (progress: (done: number | undefined, total: number | undefined) => void = () => {}) => ({ signal: new AbortController().signal, progress: (_s: string, d?: number, t?: number) => progress(d, t) });
+
+  /** A checker that records how many run at once. */
+  const engines = (n: number) => {
+    const state = { running: 0, most: 0, checked: [] as string[] };
+    const one = {
+      check: async (s: readonly LibraryItem[]) => {
+        state.running++;
+        state.most = Math.max(state.most, state.running);
+        await new Promise((r) => setTimeout(r, 5));
+        state.checked.push(s[0]!.mediaKey);
+        state.running--;
+        return [];
+      },
+    };
+    return { state, checkers: Array.from({ length: n }, () => one) };
+  };
+
+  it("checks sequences side by side, each exactly once, and saves all of them", async () => {
+    const { state, checkers } = engines(3);
+    const cache = memoryCache();
+    const r = await new PanoramaDetector(checkers, none, cache).analyze(library, ctx(), () => {});
+    expect(state.most).toBe(3);
+    expect([...state.checked].sort()).toEqual([key(1), key(10), key(20), key(30), key(40)].sort());
+    expect(r.photosChecked).toBe(10);
+
+    // Paragraph: a later scan, with any number of engines, has nothing left to do.
+    const again = engines(1);
+    const second = await new PanoramaDetector(again.checkers, none, cache).analyze(library, ctx(), () => {});
+    expect(again.state.checked).toEqual([]);
+    expect(second.photosReused).toBe(10);
+  });
+
+  it("never counts backwards or past the total", async () => {
+    const seen: number[] = [];
+    const checker = { check: async (_s: readonly LibraryItem[], _a: AbortSignal, on: (f: number) => void) => { on(0.5); await new Promise((r) => setTimeout(r, 2)); on(1); return []; } };
+    await new PanoramaDetector([checker, checker], none, memoryCache()).analyze(library, ctx((d, t) => { if (d !== undefined && t === 10) seen.push(d); }), () => {});
+    expect(Math.max(...seen)).toBe(10);
+    expect(seen.every((d, i) => i === 0 || d >= seen[i - 1]! - 2)).toBe(true);
+  });
+
+  it("stops every engine on a problem that would hit everything, and reports it", async () => {
+    let calls = 0;
+    const checker = { check: async () => { calls++; await new Promise((r) => setTimeout(r, 2)); throw new PixError(ErrorCode.AccountMismatch, "other account"); } };
+    await expect(new PanoramaDetector([checker, checker], none, memoryCache()).analyze(library, ctx(), () => {})).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
+    expect(calls).toBe(2);
+  });
+
+  it("keeps what finished before a stop, so the next scan continues from there", async () => {
+    const cache = memoryCache();
+    let calls = 0;
+    const checker = { check: async () => { if (++calls === 3) throw new PixError(ErrorCode.Cancelled, "stopped"); return []; } };
+    await expect(new PanoramaDetector(checker, none, cache).analyze(library, ctx(), () => {})).rejects.toMatchObject({ code: ErrorCode.Cancelled });
+    const rest = engines(1);
+    const r = await new PanoramaDetector(rest.checkers, none, cache).analyze(library, ctx(), () => {});
+    expect(r.photosReused).toBe(4);
+    expect(rest.state.checked).toHaveLength(3);
+  });
+});
+
+describe("ScanConcurrency", () => {
+  it("is bounded by cores and memory", () => {
+    expect(ScanConcurrency.engines(20, 32)).toBe(ScanConcurrency.MAX_ENGINES);
+    expect(ScanConcurrency.engines(2, 32)).toBe(1);
+    expect(ScanConcurrency.engines(4, 32)).toBe(2);
+    expect(ScanConcurrency.engines(20, 4)).toBe(1);
+    expect(ScanConcurrency.engines(1, undefined)).toBe(1);
   });
 });
 

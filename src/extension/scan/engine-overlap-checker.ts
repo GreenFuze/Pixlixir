@@ -3,6 +3,7 @@
  * asks the engine which photos overlap, and stitches a quick preview of each group.
  */
 
+import type { LimitFunction } from "p-limit";
 import type { LibraryItem } from "../../domain/types.js";
 import { DEFAULT_STITCH_SETTINGS, type Motion } from "../../imaging/panorama/stitch-runtime.js";
 import { PanoramaPlausibility, type CandidatePreview, type OverlapChecker, type OverlapGroup } from "../../scan/panorama-detector.js";
@@ -13,11 +14,14 @@ import type { PhotosGateway } from "../editor/photos-gateway.js";
 export class EngineOverlapChecker implements OverlapChecker {
   /** Long side of the thumbnails used for detection and previews. */
   static readonly THUMB_SIDE = 800;
-  static readonly PARALLEL_DOWNLOADS = 4;
+  /** At once, across all engines of a scan (Google's servers see the sum). */
+  static readonly PARALLEL_DOWNLOADS = 8;
 
   constructor(
     private readonly gateway: PhotosGateway,
     private readonly worker: PanoramaWorkerClient,
+    /** Shared by the scan's checkers. */
+    private readonly downloads: LimitFunction,
     private readonly nextKey: () => number,
     /** Makes the small image kept for each photo that ends up in a group. */
     private readonly shrink: (thumb: Blob) => Promise<Blob>,
@@ -27,19 +31,21 @@ export class EngineOverlapChecker implements OverlapChecker {
     const keys = new Map<number, LibraryItem>();
     const thumbs = new Map<string, Blob>();
     try {
-      // Paragraph: thumbnails into the engine, a few downloads at a time.
-      for (let i = 0; i < sequence.length; i += EngineOverlapChecker.PARALLEL_DOWNLOADS) {
-        if (signal.aborted) throw new PixError(ErrorCode.Cancelled, "The scan was stopped");
-        await Promise.all(sequence.slice(i, i + EngineOverlapChecker.PARALLEL_DOWNLOADS).map(async (item) => {
-          const blob = await this.gateway.thumbnail(item.baseUrl, EngineOverlapChecker.THUMB_SIDE);
-          thumbs.set(item.mediaKey, blob);
-          const bitmap = await createImageBitmap(blob);
-          const key = this.nextKey();
-          await this.worker.load(key, bitmap);
-          keys.set(key, item);
-          onProgress(0.4 * (keys.size / sequence.length));
-        }));
-      }
+      // Paragraph: thumbnails into the engine. All of them settle first, so a failure leaves nothing still loading.
+      const loads = await Promise.allSettled(sequence.map(async (item) => {
+        const blob = await this.downloads(() => {
+          if (signal.aborted) throw new PixError(ErrorCode.Cancelled, "The scan was stopped");
+          return this.gateway.thumbnail(item.baseUrl, EngineOverlapChecker.THUMB_SIDE);
+        });
+        thumbs.set(item.mediaKey, blob);
+        const bitmap = await createImageBitmap(blob);
+        const key = this.nextKey();
+        keys.set(key, item);
+        await this.worker.load(key, bitmap);
+        onProgress(0.4 * (thumbs.size / sequence.length));
+      }));
+      const failed = loads.find((l) => l.status === "rejected");
+      if (failed) throw failed.reason;
 
       // Paragraph: which photos overlap (keys in capture order).
       const ordered = [...keys.entries()].sort((a, b) => a[1].takenAtMs - b[1].takenAtMs).map(([k]) => k);

@@ -108,6 +108,14 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
     return this.#rpc.setTimestamps(changes);
   }
 
+  moveToTrash(dedupKeys: readonly string[]): Promise<void> {
+    return this.#rpc.moveToTrash(dedupKeys);
+  }
+
+  listTrash(page: string | null): Promise<Page<string>> {
+    return this.#rpc.listTrash(page);
+  }
+
   async fetchThumbnail(baseUrl: string, maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }> {
     // Paragraph: only Google's image CDN, at a bounded size.
     if (!CONTENT_URL.test(baseUrl)) throw new PixError(ErrorCode.InvalidMessage, "Refused to fetch a thumbnail from an unexpected address.");

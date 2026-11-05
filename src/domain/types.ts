@@ -67,6 +67,8 @@ export interface ItemFileInfo {
   fileName: string | null;
   takenAtMs: number;
   timezoneOffsetMs: number;
+  /** When Google reports it. */
+  sizeBytes?: number;
 }
 
 /** A capture date to write on an item. */

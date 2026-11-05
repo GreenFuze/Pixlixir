@@ -167,7 +167,7 @@ describe("bulk item info and date changes", () => {
     const { fetch, calls } = rpcs({ EWgK9e: [[null, [row, [`${KEY}2`, [null, null, "", null, null, null, 5, null, 0], null, null, null, null]]]] });
     const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
     expect(await adapter.readItemInfo([KEY, `${KEY}2`])).toEqual([
-      { mediaKey: KEY, fileName: "IMG-20190512-WA0001.jpg", takenAtMs: 1_700_000_000_000, timezoneOffsetMs: 7_200_000 },
+      { mediaKey: KEY, fileName: "IMG-20190512-WA0001.jpg", takenAtMs: 1_700_000_000_000, timezoneOffsetMs: 7_200_000, sizeBytes: 34 },
       { mediaKey: `${KEY}2`, fileName: null, takenAtMs: 5, timezoneOffsetMs: 0 },
     ]);
     const form = new URLSearchParams(String(calls[0]!.init.body));
@@ -187,6 +187,22 @@ describe("bulk item info and date changes", () => {
     await adapter.setDates([{ dedupKey: DEDUP, takenAtMs: 1_700_000_000_000, timezoneOffsetMs: 7_200_000 }]);
     const form = new URLSearchParams(String(calls[0]!.init.body));
     expect(JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string)).toEqual([[[DEDUP, 1_700_000_000, 7200]]]);
+  });
+
+  it("moves to trash through XwAOJf by dedup key, and reads the trash in the live shape", async () => {
+    const row = [KEY, ["https://x", 10, 10, null], 1, DEDUP, 0, 1, null, null, 0, null, null, null, null, null, 0];
+    const { fetch, calls } = rpcs({ XwAOJf: [], zy0IHe: [[row]] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    await adapter.moveToTrash([DEDUP]);
+    const form = new URLSearchParams(String(calls[0]!.init.body));
+    expect(JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string)).toEqual([null, 1, [DEDUP], 3]);
+    expect(await adapter.listTrash(null)).toEqual({ items: [DEDUP], next: null });
+  });
+
+  it("fails loudly on a trash row without a dedup key, rather than reporting an empty trash", async () => {
+    const { fetch } = rpcs({ zy0IHe: [[[KEY, [], 1, null]]] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    await expect(adapter.listTrash(null)).rejects.toBeInstanceOf(PixError);
   });
 
   it("marks timeline items of someone else as not editable, but never album rows", async () => {

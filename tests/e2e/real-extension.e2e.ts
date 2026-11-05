@@ -13,7 +13,7 @@ import { chromium, type BrowserContext, type Frame, type Page, type Worker } fro
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakePhotos, makeOverlappingShots, type FakePhoto } from "./fake-photos.js";
 
-const DIST = path.resolve("dist");
+const DIST = path.resolve(process.env.PIXLIXIR_DIST ?? "dist");
 const T0 = Date.UTC(2024, 6, 14, 9, 0, 0);
 
 describe("real extension", () => {
@@ -49,7 +49,7 @@ describe("real extension", () => {
   });
 
   const LIBRARY = { kind: "library" };
-  const panoramas = { panorama: true, dates: false };
+  const panoramas = { panorama: true, dates: false, duplicates: false };
 
   /** A Photos tab known to the service worker, and its tab id. */
   async function openPhotos(): Promise<{ page: Page; tabId: number }> {
@@ -144,15 +144,24 @@ describe("real extension", () => {
     // Paragraph: the first test already scanned this library, so nothing is downloaded now.
     const { page, tabId } = await openPhotos();
     const before = fake.renditions;
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: true, dates: true }, recheck: false } })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: true, dates: true, duplicates: false }, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
     await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 60_000 });
+    expect(await frame.locator(".status-bar").innerText()).toContain("already checked");
+    expect(fake.renditions).toBe(before);
+
+    // Paragraph: each thing looked for has its own tab, with its own results and actions.
+    expect(await frame.getByRole("tab").allInnerTexts()).toEqual(["Panoramas 1", expect.stringMatching(/^Wrong dates \d+$/)]);
+    await frame.getByRole("tab", { name: /Panoramas/ }).click();
     expect(await frame.locator(".cand").count()).toBe(1);
     expect(await frame.locator(".cand .strip img").count()).toBe(3);
     expect(await frame.locator(".cand-preview img").count()).toBe(1);
-    expect(await frame.locator(".status-bar").innerText()).toContain("already checked");
-    expect(await frame.locator(".status-bar").innerText()).toContain("names match no format");
-    expect(fake.renditions).toBe(before);
+    expect(await frame.locator(".date-rows").count()).toBe(0);
+    expect(await frame.locator("footer").count()).toBe(1);
+    await frame.getByRole("tab", { name: /Wrong dates/ }).click();
+    expect(await frame.locator(".cand").count()).toBe(0);
+    expect(await frame.locator("footer").count()).toBe(0);
+    expect(await frame.getByText("names match no format").count()).toBe(1);
 
     // Paragraph: finished results make way for a new plan, and "Re-check all" downloads the thumbnails again.
     expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: true } })).toMatchObject({ ok: true });
@@ -161,7 +170,7 @@ describe("real extension", () => {
     // Paragraph: while it runs, another plan brings it back instead of replacing it.
     const running = page.frames().find((f) => f.url().includes("/scan.html"))!;
     const url = running.url();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true }, recheck: false } })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false } })).toMatchObject({ ok: true });
     expect(page.frames().find((f) => f.url().includes("/scan.html"))!.url()).toBe(url);
     await running.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
     await running.getByRole("button", { name: "Close" }).click();
@@ -177,7 +186,7 @@ describe("real extension", () => {
   });
 
   it("refuses a scan handed over for another account", async () => {
-    await sw.evaluate(() => chrome.storage.session.set({ "pixlixir.scanSelection.other": { accountEmail: "second@example.com", plan: { scope: { kind: "library" }, detectors: { panorama: false, dates: true }, recheck: false } } }));
+    await sw.evaluate(() => chrome.storage.session.set({ "pixlixir.scanSelection.other": { accountEmail: "second@example.com", plan: { scope: { kind: "library" }, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false } } }));
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/scan.html?tab=1&email=e2e@example.com&sel=other`);
     await page.waitForSelector(".error-box");
@@ -201,7 +210,7 @@ describe("real extension", () => {
 
     // Paragraph: only the date check, so no stitching. Both names are found, from different formats.
     const { page, tabId } = await openPhotos();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true }, recheck: false } })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
     await frame.locator(".date-rows li").nth(1).waitFor({ timeout: 60_000 });
     await frame.getByRole("button", { name: "Scan again" }).waitFor();
@@ -268,6 +277,111 @@ describe("real extension", () => {
     await bulk.getByRole("button", { name: "Close" }).dispatchEvent("click");
     await panel.close();
     await page.close();
+  });
+
+  it("moves a saved panorama's originals to trash, from the editor and from the scan, and proves it", async () => {
+    const dedups = photos.slice(0, 3).map((p) => p.dedupKey);
+    const trashCalls = () => fake.calls.filter((c) => c.rpc === "XwAOJf");
+    const { page, tabId } = await openPhotos();
+
+    // Paragraph: the editor in a tab: nothing is offered before saving, then a confirm dialog that can be cancelled.
+    expect(await asExtensionPage({ type: "panel.openTool", tool: "panorama", tabId, mediaKeys: photos.slice(0, 3).map((p) => p.mediaKey) })).toMatchObject({ ok: true });
+    const editor = await pageNamed("panorama.html");
+    await editor.waitForSelector(".pano-stage img", { timeout: 120_000 });
+    expect(await editor.getByRole("button", { name: "Trash originals" }).count()).toBe(0);
+    await editor.getByRole("button", { name: "Save to Google Photos" }).click();
+    await editor.locator(".modal").getByRole("button", { name: "Save" }).click();
+    await editor.getByRole("button", { name: "Trash originals" }).waitFor({ timeout: 120_000 });
+    await editor.getByRole("button", { name: "Trash originals" }).click();
+    expect(await editor.locator(".modal h2").innerText()).toBe("Move 3 originals to trash?");
+    await editor.locator(".modal").getByRole("button", { name: "Cancel" }).click();
+    expect(trashCalls()).toHaveLength(0);
+    await editor.getByRole("button", { name: "Trash originals" }).click();
+    await editor.locator(".modal").getByRole("button", { name: "Move to trash" }).click();
+    await editor.getByText("Originals in trash").waitFor({ timeout: 30_000 });
+    expect(trashCalls()[0]!.payload).toEqual([null, 1, dedups, 3]);
+    expect([...fake.trashed].sort()).toEqual([...dedups].sort());
+    await editor.close();
+    fake.trashed.clear();
+    fake.calls.length = 0;
+
+    // Paragraph: the scan: make it again (it is marked already made, so it starts unticked).
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: false } })).toMatchObject({ ok: true });
+    const frame = await scanFrame(page);
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
+    await frame.locator(".cand input[type=checkbox]").check();
+    await frame.getByRole("button", { name: "Create 1" }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Create" }).click();
+    await frame.getByRole("button", { name: "Trash originals" }).waitFor({ timeout: 120_000 });
+    const confirmTrash = async () => {
+      await frame.getByRole("button", { name: "Trash originals" }).click();
+      await frame.locator(".modal").getByRole("button", { name: "Move to trash" }).click();
+    };
+
+    // Paragraph: a panorama that cannot be found keeps its photos, without even trying to move them.
+    fake.loseUploads = true;
+    await confirmTrash();
+    await frame.getByText("so its photos were not moved").waitFor({ timeout: 30_000 });
+    expect(trashCalls()).toHaveLength(0);
+    fake.loseUploads = false;
+
+    // Paragraph: a photo that does not reach the trash stops the run and says so; the others are recorded.
+    fake.refuseTrash.add(dedups[1]!);
+    await confirmTrash();
+    await frame.getByText("1 of 3 photos did not reach the trash").waitFor({ timeout: 30_000 });
+    expect(await frame.getByText("Originals in trash").count()).toBe(0);
+    fake.refuseTrash.clear();
+
+    // Paragraph: the retry asks for what is left only, and the pan is gone from the library.
+    await frame.getByRole("button", { name: "Trash originals" }).click();
+    expect(await frame.locator(".modal h2").innerText()).toBe("Move 1 original to trash?");
+    await frame.locator(".modal").getByRole("button", { name: "Move to trash" }).click();
+    await frame.getByText("Originals in trash").waitFor({ timeout: 30_000 });
+    expect(trashCalls().at(-1)!.payload).toEqual([null, 1, [dedups[1]], 3]);
+    expect([...fake.trashed].sort()).toEqual([...dedups].sort());
+    await frame.getByRole("button", { name: "Scan again" }).click();
+    await frame.getByText("Nothing found.").waitFor({ timeout: 120_000 });
+    expect(await frame.locator(".cand").count()).toBe(0);
+    await frame.getByRole("button", { name: "Close" }).click();
+    await page.close();
+    fake.trashed.clear();
+  });
+
+  it("finds duplicates by looks, keeps the best, and moves the rest to trash", async () => {
+    // Paragraph: four photos in this library are the same picture (three of them under other dates and names).
+    const same = [photos[0]!, ...photos.filter((p) => ["AF1QipFAKELONE0000000", "AF1QipFAKEWRONGDATE00", "AF1QipFAKECUSTOM00000"].includes(p.mediaKey))];
+    const before = fake.renditions;
+    const { page, tabId } = await openPhotos();
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: false, duplicates: true }, recheck: false } })).toMatchObject({ ok: true });
+    const frame = await scanFrame(page);
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
+    expect(await frame.getByRole("tab").count()).toBe(0); // one thing looked for: no tabs
+    expect(fake.renditions).toBe(before); // detection does not touch the 800 px renditions
+
+    // Paragraph: they group at 100%, and the oldest copy is the best one when nothing else differs.
+    await frame.locator(".dup-group").first().waitFor();
+    const group = frame.locator(".dup-group").filter({ has: frame.getByText("Best") }).first();
+    expect(await group.locator(".dup-tile").count()).toBe(same.length);
+    expect(await group.locator(".dup-tile.goes").count()).toBe(same.length - 1);
+    expect(await frame.getByRole("button", { name: `Trash ${same.length - 1}` }).count()).toBe(1);
+
+    // Paragraph: the last photo to keep can never be ticked.
+    expect(await group.locator(".dup-tile").first().locator("input").isDisabled()).toBe(true);
+
+    // Paragraph: Cancel moves nothing; confirming moves exactly the copies, with the read-back, and they leave the list.
+    const calls = () => fake.calls.filter((c) => c.rpc === "XwAOJf").length;
+    const start = calls();
+    await frame.getByRole("button", { name: `Trash ${same.length - 1}` }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Cancel" }).click();
+    expect(calls()).toBe(start);
+    await frame.getByRole("button", { name: `Trash ${same.length - 1}` }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Move to trash" }).click();
+    await frame.getByText("None at this similarity.").waitFor({ timeout: 30_000 });
+    expect([...fake.trashed].sort()).toEqual(same.slice(1).map((p) => p.dedupKey).sort());
+    expect(fake.trashed.has(same[0]!.dedupKey)).toBe(false);
+    await frame.getByRole("button", { name: "Close" }).click();
+    await page.close();
+    fake.trashed.clear();
   });
 
   it("opens Split for several photos in a tab and analyses them", async () => {

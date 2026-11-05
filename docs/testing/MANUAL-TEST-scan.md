@@ -45,6 +45,10 @@ checked"; only new photos are checked. **Re-check all** in the panel ignores sav
     photo description if any. It is in every album that holds its photos. The source photos are
     unchanged.
 14. Side panel → **Recent work** lists "Panorama of N photos · from a scan".
+15. Scan for both Panoramas and Wrong dates: each has a tab with its count. Results stay on the tab you are on as more
+    are found. **Create** only shows under Panoramas. Scanning for one thing shows no tabs.
+16. Only with test photos: on a created panorama, **Trash originals** → **Move to trash** (see MANUAL-TEST-panorama, step 11).
+    **Scan again**: the group no longer appears. With two or more created, **Trash all originals** does them all.
 
 Known limits: shared-album adds are not live-verified yet; selection scope only includes tiles
 the grid reports as selected; reloading the Photos tab stops a scan, and the next one continues from saved results.

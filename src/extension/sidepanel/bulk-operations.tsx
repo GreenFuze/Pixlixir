@@ -33,7 +33,7 @@ export function BulkOperations(props: Props) {
   const [to, setTo] = useState(ScanPlans.isoDate(now));
   const [chosenAlbum, setChosenAlbum] = useState<string | null>(null);
   const [albums, setAlbums] = useState<AlbumRef[] | null>(null);
-  const [detectors, setDetectors] = useState<Record<DetectorId, boolean>>({ panorama: true, dates: true });
+  const [detectors, setDetectors] = useState<Record<DetectorId, boolean>>({ panorama: true, dates: true, duplicates: true });
   const [recheck, setRecheck] = useState(false);
   const [error, setError] = useState<SerializedError | null>(null);
   const followed: ScanScopeKind = selection.length > 0 ? "selection" : albumKey ? "album" : "dateRange";
@@ -81,7 +81,7 @@ export function BulkOperations(props: Props) {
   const start = async () => {
     setError(null);
     try {
-      if (!detectors.panorama && !detectors.dates) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
+      if (!detectors.panorama && !detectors.dates && !detectors.duplicates) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
       await Messenger.toBackground({ type: "panel.openScan", tabId, plan: { scope: ScanScopes.validate(scope()), detectors, recheck } });
     } catch (err) {
       setError(failure(err));
@@ -117,6 +117,7 @@ export function BulkOperations(props: Props) {
 
       <div class="look-for">
         <label class="opt" title="Overlapping photos taken seconds apart, ready to stitch"><input type="checkbox" checked={detectors.panorama} onChange={() => toggle("panorama")} /> Panoramas</label>
+        <label class="opt" title="Photos that look the same. You choose how similar in the results. Copies are only found among the photos looked through."><input type="checkbox" checked={detectors.duplicates} onChange={() => toggle("duplicates")} /> Duplicates</label>
         <div class="row">
           <label class="opt" title="Photos and videos whose date differs from the date in their file name"><input type="checkbox" checked={detectors.dates} onChange={() => toggle("dates")} /> Wrong dates</label>
           <button class="btn small" title="The filename formats this account knows" onClick={run(() => Messenger.toBackground({ type: "panel.openSettings", tabId }))}>Formats…</button>

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-dev/
 *.log
 .DS_Store
 # never commit live captures or personal media

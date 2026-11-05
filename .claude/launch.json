@@ -4,8 +4,21 @@
     {
       "name": "editor-sandbox",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["tools/dev/serve.mjs", "5174"],
+      "runtimeArgs": [
+        "tools/dev/serve.mjs",
+        "5174"
+      ],
       "port": 5174
+    },
+    {
+      "name": "editor-sandbox-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/dev/serve.mjs",
+        "5175",
+        "dist-dev"
+      ],
+      "port": 5175
     }
   ]
 }

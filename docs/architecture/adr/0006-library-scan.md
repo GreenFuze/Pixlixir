@@ -44,6 +44,9 @@ its photos: same date (the first photo's), location, metadata and albums.
    result version. Sequences are the unit because they are stable: a new photo changes only its
    own sequence, and new uploads with old dates are still found, which "scan since last date"
    would miss. Listing always runs (cheap); failed previews are not saved.
+   Results are saved as each sequence finishes, so a scan that stops continues from there.
+   Saved results survive reloading the extension from the same folder; removing it, or loading
+   it from another folder, loses them (a different extension id).
 7. *Partial failure*: a sequence that cannot be checked is reported and skipped. Account and
    storage problems, or five failures in a row, stop the scan.
 
@@ -72,6 +75,23 @@ upper limit on stitched area is there because the turning-in-place model stretch
 strips (one 2-photo burst measured 8.88 photos). With these rules **no group on the owner's
 library passes**. The positive evidence is the three public sets, so the limits may be too
 strict for hand-held phone panoramas; that has not been checked on such photos.
+
+**Speed.** One engine is single-threaded, so sequences are checked side by side, one engine per
+half a core, up to 8, and one per 4 GB of memory. Engines only live while a scan runs. Downloads
+are limited to 8 at once across all engines. Timed on the real build (128 synthetic photos in 16
+sequences, fake server, so no network; another scan was using the same machine, so runs are noisy;
+2026-11-05, every run found the same 8 groups):
+
+| Engines | Seconds (two runs) | Peak browser memory |
+|---|---|---|
+| 1 | 176, 253 | 1.3 GB |
+| 2 | 68 | 1.6 GB |
+| 4 | 61, 82 | 2.3 GB |
+| 8 | 37, 68 | 3.6 GB |
+
+Smaller thumbnails were rejected: on the owner's library a 600 px download was not faster than
+800 px (916 ms against 398 ms median, likely because 800 px renditions already existed), and the limits were
+measured on 800 px input. Real libraries have not been timed yet.
 
 **Consequences.**
 + Future detectors reuse listing, scopes, review, bulk execution and results.

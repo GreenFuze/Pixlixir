@@ -1,16 +1,19 @@
 /** Library scan (shown as a modal over Google Photos): find panorama candidates, review, create in bulk, see results. */
 
 import { useEffect, useState } from "preact/hooks";
+import { DuplicatePlans, DuplicateSimilarity, type DuplicateGroup } from "../../scan/duplicates.js";
+import type { DetectorId } from "../../scan/scan-detector.js";
 import { ScanEta } from "../../scan/scan-eta.js";
 import { bootEditor, ErrorBox, useSnapshot } from "../editor/editor-ui.js";
 import { PanoramaEditor } from "../editor/panorama/panorama-editor.js";
-import { PanoramaFormat } from "../editor/panorama/panorama-ui.js";
+import { PanoramaFormat, TrashOriginalsDialog } from "../editor/panorama/panorama-ui.js";
 import { ScanSession, type CandidateView, type ScanSnapshot } from "./scan-session.js";
+import { ScanTabs } from "./scan-tabs.js";
 
 /** Bar + one status line for whichever stage is running. */
 function Progress(props: { snap: ScanSnapshot }) {
   const { phase, candidates, progress } = props.snap;
-  if (phase.name !== "scanning" && phase.name !== "creating" && phase.name !== "fixingDates") return null;
+  if (phase.name !== "scanning" && phase.name !== "creating" && phase.name !== "fixingDates" && phase.name !== "trashing") return null;
   const found = candidates.length;
   let text: string;
   let done: number | null;
@@ -23,6 +26,10 @@ function Progress(props: { snap: ScanSnapshot }) {
     done = phase.done;
     total = phase.total;
     text = `Changing dates: ${phase.done.toLocaleString()} of ${phase.total.toLocaleString()}`;
+  } else if (phase.name === "trashing") {
+    done = phase.done;
+    total = phase.total;
+    text = `Moving to trash: ${phase.done.toLocaleString()} of ${phase.total.toLocaleString()}`;
   } else {
     done = phase.done;
     total = phase.total;
@@ -39,11 +46,12 @@ function Progress(props: { snap: ScanSnapshot }) {
   );
 }
 
-function Candidate(props: { session: ScanSession; snap: ScanSnapshot; view: CandidateView }) {
-  const { session, snap, view } = props;
+function Candidate(props: { session: ScanSession; snap: ScanSnapshot; view: CandidateView; onTrash: (ids: string[]) => void }) {
+  const { session, snap, view, onTrash } = props;
   const c = view.candidate;
   const first = c.items[0]!;
-  const busy = snap.phase.name === "creating";
+  const busy = snap.phase.name === "creating" || snap.phase.name === "trashing";
+  const trashed = view.result?.job.originalsTrash?.state === "moved";
   const status =
     view.status === "created" ? <span class="pill ok">Created</span>
     : view.status === "working" ? <span class="pill">{view.step ?? "Working…"}</span>
@@ -71,7 +79,12 @@ function Candidate(props: { session: ScanSession; snap: ScanSnapshot; view: Cand
         {c.preview.motion === "flat" && <div class="row"><span class="pill" title="Stitched as photos of a flat surface, because turning in place did not align">Flat surface</span></div>}
         {view.result && (
           <div class="small">
-            <a href={view.result.webUrl} target="_blank" rel="noreferrer">Open ↗</a>
+            <div class="row">
+              <a href={view.result.webUrl} target="_blank" rel="noreferrer">Open ↗</a>
+              {trashed
+                ? <span class="pill">Originals in trash</span>
+                : ScanSession.trashableKeys(view).length > 0 && <button class="btn small danger" disabled={snap.phase.name !== "review"} title="Move the photos in this panorama to Google Photos’ trash" onClick={() => onTrash([c.id])}>Trash originals</button>}
+            </div>
             <span class="muted"> {view.result.width.toLocaleString()} × {view.result.height.toLocaleString()} px{view.result.albums.length > 0 ? ` · ${view.result.albums.map((a) => `“${a}”`).join(", ")}` : ""}</span>
             {view.result.skipped > 0 && <div class="err">{view.result.skipped} photo(s) could not be loaded and were left out.</div>}
             {[...view.result.problems, ...view.result.warnings].map((p, i) => <div key={i} class="err">{p}</div>)}
@@ -88,7 +101,7 @@ function DateFixes(props: { session: ScanSession; snap: ScanSnapshot; onFix: () 
   const { session, snap, onFix, onUndo } = props;
   const { dateFixes, dateFixesShown } = snap;
   const fixing = snap.phase.name === "fixingDates";
-  const busy = fixing || snap.phase.name === "creating" || snap.phase.name === "scanning";
+  const busy = fixing || snap.phase.name === "creating" || snap.phase.name === "scanning" || snap.phase.name === "trashing";
   const fixed = dateFixes.filter((d) => d.fixed).length;
   const selected = session.selectedDateFixes();
   return (
@@ -124,15 +137,83 @@ function DateFixes(props: { session: ScanSession; snap: ScanSnapshot; onFix: () 
   );
 }
 
-function Results(props: { snap: ScanSnapshot }) {
+const fileSize = (bytes: number | null) => (bytes === null ? "" : ` · ${(bytes / 1048576).toFixed(1)} MB`);
+
+function DuplicateRow(props: { session: ScanSession; snap: ScanSnapshot; group: DuplicateGroup; busy: boolean }) {
+  const { session, snap, group, busy } = props;
+  const view = snap.duplicates!;
+  const plan = DuplicatePlans.plan(group, view.choices);
+  const lostLocation = plan && !plan.keep.location && plan.trash.some((i) => i.location);
+  return (
+    <li class="dup-group">
+      <div class="dup-tiles">
+        {group.members.map((m, n) => {
+          const { item, sizeBytes } = m.photo;
+          const goes = DuplicatePlans.goes(group, m, view.choices);
+          const mine = item.editable !== false;
+          const lastToKeep = !goes && group.members.every((o) => o === m || DuplicatePlans.goes(group, o, view.choices));
+          return (
+            <label key={item.dedupKey} class={goes ? "dup-tile goes" : "dup-tile"} title={`${PanoramaFormat.date(item.takenAtMs, item.timezoneOffsetMs)}${item.location ? " · has a location" : ""}`}>
+              {view.thumbs[item.dedupKey] ? <img src={view.thumbs[item.dedupKey]} alt="" /> : <span class="ph" />}
+              <span class="dup-caption">
+                <input type="checkbox" aria-label="Move to trash" checked={goes} disabled={busy || !mine || lastToKeep} onChange={() => session.toggleDuplicate(group, m)} />
+                {n === 0 ? <span class="pill ok" title={group.reason}>Best</span> : <span class="pill">{m.similarity}%</span>}
+                {!mine && <span class="pill" title="Someone else’s photo: it cannot be moved to trash">Not yours</span>}
+              </span>
+              <span class="muted small">{item.width.toLocaleString()} × {item.height.toLocaleString()}{fileSize(sizeBytes)}</span>
+            </label>
+          );
+        })}
+      </div>
+      {lostLocation && <span class="pill warn" title="The photo that stays has no location, and one going to trash does">Location only on a copy</span>}
+    </li>
+  );
+}
+
+function Duplicates(props: { session: ScanSession; snap: ScanSnapshot; onTrash: () => void }) {
+  const { session, snap, onTrash } = props;
+  const view = snap.duplicates!;
+  const groups = session.duplicateGroups();
+  const busy = snap.phase.name !== "review";
+  const goes = session.duplicatesToTrash();
+  return (
+    <section class="card dups">
+      <div class="row between">
+        <label class="opt" title="How alike two photos must look. 100% means the same picture once at the same size, compared at thumbnail size.">
+          Similarity
+          <input type="range" min={DuplicateSimilarity.MIN_PERCENT} max={DuplicateSimilarity.MAX_PERCENT} step={1} value={view.similarity} disabled={busy} onInput={(e) => session.setDuplicateSimilarity(Number((e.target as HTMLInputElement).value))} />
+          <strong>{view.similarity}%</strong>
+          <span class="muted small">{groups.length.toLocaleString()} group{groups.length === 1 ? "" : "s"}</span>
+        </label>
+        <div class="row">
+          <button class="btn small" disabled={busy} title="Keep the best of each group, trash the rest" onClick={() => session.chooseAllDuplicates(true)}>All</button>
+          <button class="btn small" disabled={busy} title="Trash nothing" onClick={() => session.chooseAllDuplicates(false)}>None</button>
+          <button class="btn small danger" disabled={busy || goes === 0} onClick={onTrash}>Trash {goes.toLocaleString()}</button>
+        </div>
+      </div>
+      {view.error && <ErrorBox error={view.error} />}
+      {view.skippedShared > 0 && <div class="row"><span class="pill warn" title="Adding to shared albums is not verified yet, so these groups keep all their photos">{view.skippedShared} group{view.skippedShared === 1 ? "" : "s"} left alone: shared album</span></div>}
+      {view.problems.map((p, i) => <div key={i} class="err">{p.message}</div>)}
+      <ul class="dup-groups">{groups.slice(0, view.shown).map((g) => <DuplicateRow key={g.members[0]!.photo.item.dedupKey} session={session} snap={snap} group={g} busy={busy} />)}</ul>
+      {groups.length === 0 && <div class="muted center-text">None at this similarity.</div>}
+      {groups.length > view.shown && <button class="btn small" onClick={() => session.showMoreDuplicates()}>Show more ({(groups.length - view.shown).toLocaleString()})</button>}
+    </section>
+  );
+}
+
+function Results(props: { session: ScanSession; snap: ScanSnapshot; onTrash: (ids: string[]) => void }) {
   const created = props.snap.candidates.filter((c) => c.status === "created");
   const failed = props.snap.candidates.filter((c) => c.status === "failed");
   if (created.length === 0 && failed.length === 0) return null;
+  const withOriginals = props.session.withOriginals();
   return (
     <section class="card results" aria-live="polite">
-      <strong title="New items dated like their first photo, with the photos’ location and description, in the same albums. Also listed under Recent work in the side panel.">
-        {created.length} created{failed.length > 0 ? `, ${failed.length} failed` : ""}
-      </strong>
+      <div class="row between">
+        <strong title="New items dated like their first photo, with the photos’ location and description, in the same albums. Also listed under Recent work in the side panel.">
+          {created.length} created{failed.length > 0 ? `, ${failed.length} failed` : ""}
+        </strong>
+        {withOriginals.length > 1 && <button class="btn small danger" disabled={props.snap.phase.name !== "review"} title="Move the photos in these panoramas to Google Photos’ trash" onClick={() => props.onTrash(withOriginals.map((c) => c.candidate.id))}>Trash all originals</button>}
+      </div>
       <ul class="made">
         {created.map((c) => (
           <li key={c.candidate.id}>
@@ -147,29 +228,57 @@ function Results(props: { snap: ScanSnapshot }) {
   );
 }
 
+/** One tab per thing this scan looks for. With only one there is nothing to switch, so no bar. */
+function TabBar(props: { session: ScanSession; snap: ScanSnapshot; active: DetectorId }) {
+  const { session, snap, active } = props;
+  const tabs = ScanTabs.list(snap.detectors, { panorama: snap.candidates.length, dates: snap.dateFixes.length, duplicates: session.duplicateGroups().length });
+  if (tabs.length < 2) return null;
+  const move = (e: KeyboardEvent) => {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    const next = tabs[(tabs.findIndex((t) => t.id === active) + step + tabs.length) % tabs.length]!;
+    session.chooseTab(next.id);
+  };
+  return (
+    <div class="tabs" role="tablist" aria-label="Results" onKeyDown={move}>
+      {tabs.map((t) => (
+        <button key={t.id} role="tab" id={`tab-${t.id}`} aria-selected={t.id === active} aria-controls="tab-panel" tabIndex={t.id === active ? 0 : -1} class={t.id === active ? "tab on" : "tab"} onClick={() => session.chooseTab(t.id)}>
+          {t.label} <span class="count">{t.count.toLocaleString()}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function App(props: { session: ScanSession }) {
   const { session } = props;
   const snap = useSnapshot(session);
   const [confirming, setConfirming] = useState(false);
   const [confirmingDates, setConfirmingDates] = useState<"fix" | "undo" | null>(null);
+  const [confirmingTrash, setConfirmingTrash] = useState<string[] | null>(null);
+  const [confirmingDuplicates, setConfirmingDuplicates] = useState(false);
   const { phase } = snap;
   const selected = session.selectedCount();
   const scanning = phase.name === "scanning";
   const creating = phase.name === "creating";
   const fixingDates = phase.name === "fixingDates";
+  const trashing = phase.name === "trashing";
+  const active = ScanTabs.active(snap.detectors, snap.tab);
 
   // Paragraph: Escape closes the topmost thing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || snap.editor) return;
-      if (confirmingDates) setConfirmingDates(null);
+      if (confirmingDuplicates) setConfirmingDuplicates(false);
+      else if (confirmingTrash) setConfirmingTrash(null);
+      else if (confirmingDates) setConfirmingDates(null);
       else if (confirming) setConfirming(false);
       else if (snap.confirmingClose) session.cancelClose();
       else session.requestClose();
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [confirming, confirmingDates, snap.confirmingClose, phase.name, snap.editor]);
+  }, [confirming, confirmingDates, confirmingTrash, confirmingDuplicates, snap.confirmingClose, phase.name, snap.editor]);
 
   if (snap.editor) {
     return <PanoramaEditor key={snap.editor.candidateId} session={snap.editor.session} back={{ label: "← Back", title: "Back to the scan results", onBack: () => session.closeEditor(), escape: true }} />;
@@ -180,11 +289,11 @@ function App(props: { session: ScanSession }) {
       <header>
         <div class="title">
           <span class="logo">✦</span>
-          <h1>{snap.detectors.panorama || !snap.detectors.dates ? "Scan library" : "Fix dates"}</h1>
+          <h1>{snap.detectors.dates && !snap.detectors.panorama && !snap.detectors.duplicates ? "Fix dates" : "Scan library"}</h1>
         </div>
         <div class="row">
           <span class="pill" title="The scan reads this Google account">{snap.params.email}</span>
-          {(scanning || creating || fixingDates || phase.name === "review") && <button class="btn icon small" title="Minimize: keeps running, with progress on the Pixlixir chip" aria-label="Minimize" onClick={() => session.minimize()}>–</button>}
+          {(scanning || creating || fixingDates || trashing || phase.name === "review") && <button class="btn icon small" title="Minimize: keeps running, with progress on the Pixlixir chip" aria-label="Minimize" onClick={() => session.minimize()}>–</button>}
           <button class="btn icon small" title="Close" aria-label="Close" onClick={() => session.requestClose()}>✕</button>
         </div>
       </header>
@@ -197,34 +306,44 @@ function App(props: { session: ScanSession }) {
               <div class="row between">
                 <span>
                   <strong>{snap.scopeLabel}</strong>
-                  {snap.summary && <span class="muted small"> · {snap.summary.photos.toLocaleString()} photos · {snap.detectors.panorama ? `${snap.candidates.length} group${snap.candidates.length === 1 ? "" : "s"}` : `${snap.dateFixes.length.toLocaleString()} wrong`}</span>}
-                  {snap.summary && snap.summary.unmatchedNames > 0 && <span class="muted small" title="Add their format in Settings to include them"> · {snap.summary.unmatchedNames.toLocaleString()} name{snap.summary.unmatchedNames === 1 ? "" : "s"} match no format</span>}
+                  {snap.summary && <span class="muted small"> · {snap.summary.photos.toLocaleString()} photos</span>}
                   {snap.summary && snap.summary.photosReused > 0 && <span class="muted small" title="Answered from saved results, without checking them again"> · {snap.summary.photosReused.toLocaleString()} already checked</span>}
                 </span>
-                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : fixingDates ? <button class="btn small" title="Stops after this batch" onClick={() => session.stopCreating()}>Stop</button> : !creating && <button class="btn small" title="Run this scan again" onClick={() => session.scanAgain()}>Scan again</button>}
+                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : fixingDates ? <button class="btn small" title="Stops after this batch" onClick={() => session.stopCreating()}>Stop</button> : !creating && !trashing && <button class="btn small" title="Run this scan again" onClick={() => session.scanAgain()}>Scan again</button>}
               </div>
               <Progress snap={snap} />
               {snap.scanError && <ErrorBox error={snap.scanError} />}
               {snap.summary && snap.summary.failures.length > 0 && <div class="err" title={snap.summary.failures[0]!.message}>{snap.summary.failures.length} sequence{snap.summary.failures.length === 1 ? "" : "s"} could not be checked: {snap.summary.failures[0]!.message}</div>}
           </section>
 
-          <Results snap={snap} />
+          <TabBar session={session} snap={snap} active={active} />
 
-          {snap.dateFixes.length > 0 && <DateFixes session={session} snap={snap} onFix={() => setConfirmingDates("fix")} onUndo={() => setConfirmingDates("undo")} />}
-          {snap.candidates.length === 0 && snap.dateFixes.length === 0 && !scanning && !snap.scanError && <div class="muted center-text">{snap.summary ? "Nothing found." : "Stopped."}</div>}
-          {snap.candidates.length > 0 && <ul class="cands">{snap.candidates.map((v) => <Candidate key={v.candidate.id} session={session} snap={snap} view={v} />)}</ul>}
+          {active === "panorama" && (
+            <>
+              <Results session={session} snap={snap} onTrash={setConfirmingTrash} />
+              {snap.candidates.length > 0 && <ul class="cands">{snap.candidates.map((v) => <Candidate key={v.candidate.id} session={session} snap={snap} view={v} onTrash={setConfirmingTrash} />)}</ul>}
+            </>
+          )}
+          {active === "duplicates" && snap.duplicates && <Duplicates session={session} snap={snap} onTrash={() => setConfirmingDuplicates(true)} />}
+          {active === "dates" && (
+            <>
+              {snap.summary && snap.summary.unmatchedNames > 0 && <div class="muted small tab-note" title="Add their format in Settings to include them">{snap.summary.unmatchedNames.toLocaleString()} name{snap.summary.unmatchedNames === 1 ? "" : "s"} match no format</div>}
+              {snap.dateFixes.length > 0 && <DateFixes session={session} snap={snap} onFix={() => setConfirmingDates("fix")} onUndo={() => setConfirmingDates("undo")} />}
+            </>
+          )}
+          {(active === "panorama" ? snap.candidates.length : active === "dates" ? snap.dateFixes.length : (snap.duplicates?.index.links.length ?? 0)) === 0 && !scanning && !snap.scanError && <div class="muted center-text">{snap.summary ? "Nothing found." : "Stopped."}</div>}
         </div>
       )}
 
-      {snap.candidates.length > 0 && (phase.name === "review" || creating || scanning || fixingDates) && (
+      {active === "panorama" && snap.candidates.length > 0 && (phase.name === "review" || creating || scanning || fixingDates || trashing) && (
         <footer>
-          <button class="btn small" disabled={creating} onClick={() => session.selectAll(true)}>All</button>
-          <button class="btn small" disabled={creating} onClick={() => session.selectAll(false)}>None</button>
+          <button class="btn small" disabled={creating || trashing} onClick={() => session.selectAll(true)}>All</button>
+          <button class="btn small" disabled={creating || trashing} onClick={() => session.selectAll(false)}>None</button>
           <div class="grow" />
           {creating ? (
             <button class="btn" onClick={() => session.stopCreating()}>Stop after this one</button>
           ) : (
-            <button class="btn primary" disabled={selected === 0 || scanning || fixingDates} onClick={() => setConfirming(true)}>Create {selected}</button>
+            <button class="btn primary" disabled={selected === 0 || scanning || fixingDates || trashing} onClick={() => setConfirming(true)}>Create {selected}</button>
           )}
         </footer>
       )}
@@ -264,11 +383,48 @@ function App(props: { session: ScanSession }) {
         </div>
       )}
 
+      {confirmingDuplicates && (
+        <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dups-title">
+          <div class="modal card">
+            <h2 id="dups-title">Move {session.duplicatesToTrash().toLocaleString()} photo{session.duplicatesToTrash() === 1 ? "" : "s"} to trash?</h2>
+            <p>From <strong>{snap.params.email}</strong>. At least one photo of each group stays.</p>
+            <ul class="inherit small">
+              <li>The photo that stays joins their albums, and takes a description it does not have.</li>
+              <li>A group with a copy in a shared album is left alone.</li>
+              <li>They also leave phones with backup on.</li>
+              <li>Google keeps them in Trash for 60 days (30 if not backed up), then deletes them.</li>
+            </ul>
+            <div class="row end">
+              <button class="btn" autofocus onClick={() => setConfirmingDuplicates(false)}>Cancel</button>
+              <button class="btn danger" onClick={() => { setConfirmingDuplicates(false); void session.trashDuplicates(); }}>Move to trash</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmingTrash && (() => {
+        const views = snap.candidates.filter((c) => confirmingTrash.includes(c.candidate.id));
+        const photos = views.reduce((n, v) => n + ScanSession.trashableKeys(v).length, 0);
+        const all = views.reduce((n, v) => n + v.candidate.items.length, 0);
+        const only = views.length === 1 ? views[0]!.result : null;
+        return (
+          <TrashOriginalsDialog
+            photos={photos}
+            email={snap.params.email}
+            size={only}
+            staying={all - photos - views.reduce((n, v) => n + (v.result?.job.originalsTrash?.moved.length ?? 0), 0)}
+            problems={views.reduce((n, v) => n + (v.result?.problems.length ?? 0), 0)}
+            onCancel={() => setConfirmingTrash(null)}
+            onConfirm={() => { const ids = confirmingTrash; setConfirmingTrash(null); void session.trashOriginals(ids); }}
+          />
+        );
+      })()}
+
       {snap.confirmingClose && (
         <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="close-title">
           <div class="modal card">
-            <h2 id="close-title">{creating ? "Stop creating panoramas?" : fixingDates ? "Stop changing dates?" : "Stop the scan?"}</h2>
-            <p>{creating ? "Panoramas already created stay in your library." : fixingDates ? "Dates already changed stay changed. Undo is lost once this closes." : "What it found so far will be lost."}</p>
+            <h2 id="close-title">{creating ? "Stop creating panoramas?" : fixingDates ? "Stop changing dates?" : trashing ? "Stop moving to trash?" : "Stop the scan?"}</h2>
+            <p>{creating ? "Panoramas already created stay in your library." : fixingDates ? "Dates already changed stay changed. Undo is lost once this closes." : trashing ? "Photos already moved stay in Google Photos’ trash." : "What it found so far will be lost."}</p>
             <div class="row end">
               <button class="btn" autofocus onClick={() => session.cancelClose()}>Keep going</button>
               <button class="btn" onClick={() => session.minimize()}>Minimize</button>

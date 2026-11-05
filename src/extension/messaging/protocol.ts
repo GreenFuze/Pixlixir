@@ -38,7 +38,7 @@ const ScanPlanSchema = z.object({
     z.object({ kind: z.literal("selection"), mediaKeys: z.array(z.string().min(10)).max(MAX_SCAN_SELECTION) }),
     z.object({ kind: z.literal("library") }),
   ]),
-  detectors: z.object({ panorama: z.boolean(), dates: z.boolean() }),
+  detectors: z.object({ panorama: z.boolean(), dates: z.boolean(), duplicates: z.boolean() }),
   recheck: z.boolean(),
 });
 const ActivitySchema = z.object({ label: z.string().max(40), busy: z.boolean() });
@@ -91,6 +91,8 @@ export const PageToContent = z.discriminatedUnion("type", [
     expectedEmail: z.string(),
     changes: z.array(z.object({ dedupKey: z.string().min(10), takenAtMs: z.number(), timezoneOffsetMs: z.number() })).min(1).max(500),
   }),
+  z.object({ type: z.literal("photos.moveToTrash"), expectedEmail: z.string(), dedupKeys: z.array(z.string().min(10)).min(1).max(100) }),
+  z.object({ type: z.literal("photos.listTrash"), expectedEmail: z.string(), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.thumbnail"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000), maxSide: z.number().int().min(64).max(2048) }),
   z.object({ type: z.literal("photos.addToAlbum"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(50), album: AlbumRefSchema }),
   z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
@@ -139,6 +141,8 @@ export interface ReplyMap {
   "photos.getItemDetails": ItemDetails;
   "photos.readItemInfo": ItemFileInfo[];
   "photos.setDates": null;
+  "photos.moveToTrash": null;
+  "photos.listTrash": Page<string>;
   "photos.thumbnail": { bytesBase64: string; mimeType: string };
   "photos.addToAlbum": null;
   "photos.setDescription": null;

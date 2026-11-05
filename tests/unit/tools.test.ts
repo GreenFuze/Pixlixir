@@ -26,7 +26,7 @@ describe("ToolEligibility", () => {
 describe("FixDatesTool", () => {
   it("takes photos and videos alike, and looks for nothing else", () => {
     const video = { mediaKey: "AF1QipVIDEO000000000", type: "video" };
-    expect(FixDatesTool.plan([photo(1), video])).toEqual({ scope: { kind: "selection", mediaKeys: [photo(1).mediaKey, video.mediaKey] }, detectors: { panorama: false, dates: true }, recheck: false });
+    expect(FixDatesTool.plan([photo(1), video])).toEqual({ scope: { kind: "selection", mediaKeys: [photo(1).mediaKey, video.mediaKey] }, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false });
   });
 
   it("needs a selection a scan can hold", () => {

@@ -63,6 +63,8 @@ export interface PanoramaJob {
   usedMediaKeys: string[];
   /** Their dedup keys (stable across library and album views, unlike album item keys). */
   usedDedupKeys?: string[];
+  /** Originals the user moved to trash after saving. Written before the first move. */
+  originalsTrash?: { dedupKeys: string[]; moved: string[]; state: "moving" | "moved" | "failed" } | null;
   settings: StitchSettings;
   status: "editing" | "saving" | "done" | "failed";
   saved: { mediaKey: string; webUrl: string; fileName: string; width: number; height: number } | null;
@@ -95,7 +97,21 @@ export interface DateFixJob {
   updatedAt: number;
 }
 
-export type PixJob = SplitJob | PanoramaJob | DateFixJob;
+/** Copies moved to trash from the duplicates results. Written before the first move. */
+export interface DuplicateTrashJob {
+  id: string;
+  kind: "duplicateTrash";
+  accountEmail: string;
+  sourceMediaKey: string;
+  dedupKeys: string[];
+  moved: string[];
+  status: "saving" | "done" | "partial" | "failed";
+  error: SerializedError | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PixJob = SplitJob | PanoramaJob | DateFixJob | DuplicateTrashJob;
 
 interface PixDb extends DBSchema {
   jobs: { key: string; value: PixJob; indexes: { bySource: [string, string]; byUpdated: number } };

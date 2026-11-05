@@ -44,6 +44,11 @@ export interface PhotosLibraryAdapter {
   // ---- repairing metadata (changes existing items in place, only after the user confirms) ----
   setDates(changes: readonly DateChange[]): Promise<void>;
 
+  // ---- trash (always recoverable from Google's Trash; there is no permanent delete here) ----
+  moveToTrash(dedupKeys: readonly string[]): Promise<void>;
+  /** Dedup keys of one page of the trash. */
+  listTrash(page: string | null): Promise<Page<string>>;
+
   capabilities(): Capability[];
 }
 

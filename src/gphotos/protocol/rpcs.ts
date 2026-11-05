@@ -22,6 +22,8 @@ export const RpcId = {
   addToSharedAlbum: "laUYf",
   setDescription: "AQNOFd",
   bulkInfo: "EWgK9e",
+  moveToTrash: "XwAOJf",
+  listTrash: "zy0IHe",
 } as const;
 
 /** Ext-object key that marks video items (GPTK, observed in lcxiM/VrseUb). */
@@ -219,7 +221,8 @@ export class PhotosRpc {
     const data = await this.client.call(RpcId.bulkInfo, [[[mediaKeys.map((k) => [k])], [fieldMask]]]);
     return new PositionalReader(RpcId.bulkInfo, data).array([0, 1], "rows").map((row) => {
       const r = new PositionalReader(RpcId.bulkInfo, row);
-      return { mediaKey: r.string([0], "mediaKey"), fileName: r.optionalString([1, 3]), takenAtMs: r.number([1, 6], "takenAt"), timezoneOffsetMs: r.optionalNumber([1, 7]) ?? 0 };
+      const sizeBytes = r.optionalNumber([1, 9]);
+      return { mediaKey: r.string([0], "mediaKey"), fileName: r.optionalString([1, 3]), takenAtMs: r.number([1, 6], "takenAt"), timezoneOffsetMs: r.optionalNumber([1, 7]) ?? 0, ...(sizeBytes === null ? {} : { sizeBytes }) };
     });
   }
 
@@ -227,5 +230,17 @@ export class PhotosRpc {
   async setTimestamps(items: readonly { dedupKey: string; takenAtMs: number; timezoneOffsetMs: number }[]): Promise<void> {
     const payload = [items.map((i) => [i.dedupKey, Math.round(i.takenAtMs / 1000), Math.round(i.timezoneOffsetMs / 1000)])];
     await this.client.call(RpcId.setTimestamps, payload);
+  }
+
+  /** XwAOJf — move items to the trash, by dedup key. Live-verified with synthetic items; Pixlixir has no permanent delete. */
+  async moveToTrash(dedupKeys: readonly string[]): Promise<void> {
+    await this.client.call(RpcId.moveToTrash, [null, 1, dedupKeys, 3]);
+  }
+
+  /** zy0IHe — dedup keys of one page of the trash. Shape live-verified 2026-11-05 (read-only). */
+  async listTrash(pageId: string | null): Promise<Page<string>> {
+    const r = new PositionalReader(RpcId.listTrash, await this.client.call(RpcId.listTrash, [pageId]));
+    const rows = r.at([0]);
+    return { items: Array.isArray(rows) ? rows.map((row) => new PositionalReader(RpcId.listTrash, row).string([3], "trash.dedupKey")) : [], next: ListingParser.nextPage(r.at([1])) };
   }
 }

@@ -40,7 +40,7 @@ Live-verified on 2026-11-04 from page context: `VrseUb`, `fDcn4b`, `mdpdU`, `DaS
 | `VrseUb` | Item info | `[mediaKey, null, null, null, null]` | `[0][0]` mediaKey, `[0][1][0]` base URL, `[0][1][1..2]` w/h, `[0][2]` taken ms, `[0][3]` dedupKey, `[0][4]` tz ms | live-verified |
 | `fDcn4b` | Extended info (own items only) | `[mediaKey, 1, null, null, 1]` | `[0][2]` file name, `[0][5]` size bytes | live-verified |
 | `mdpdU` | Commit an upload | `[[[uploadToken, fileName, clientTimeMs, 2, 2]]]` | `[0][0][1]` = new item: `[0]` mediaKey, `[1][1..2]` w/h, `[3]` dedupKey | live-verified |
-| `EWgK9e` | File name and dates of many items | `[[[[[key], …]], [fieldMask]]]` | `[0][1]`: rows `[key, [_, _, description, fileName, _, _, takenMs, offsetMs, …]]`; takes library and album item keys | live-verified 2026-11-05 (read-only) |
+| `EWgK9e` | File name and dates of many items | `[[[[[key], …]], [fieldMask]]]` | `[0][1]`: rows `[key, [_, _, description, fileName, _, _, takenMs, offsetMs, _, sizeBytes, …]]`; takes library and album item keys | live-verified 2026-11-05 (read-only) |
 | `DaSgWe` | Set capture time | `[[[dedupKey, takenSec, tzSec]]]` | (none) — verified by reading back via `VrseUb` | live-verified |
 
 ## RPCs added for the library scan (2026-11-05)
@@ -59,7 +59,8 @@ test album "Pixlixir probe - safe to delete" (left for the user to delete).
 | `laUYf` | Add to shared album | `[albumKey, [2, null, [[[key]]…], null, null, null, [1]]]` | — | implemented per GPTK, **not** live-verified |
 | `AQNOFd` | Set description | `[null, text, dedupKey]` | `[]`; read back via `fDcn4b[0][1]` | live-verified |
 | `OXvT9d` | Create album | `[title, null, 2]` | `[0][0]` album key | probe only (not used by Pixlixir) |
-| `XwAOJf` | Move to trash | `[null, 1, [dedupKeys], 3]` | — ; items appear in `zy0IHe` (trash) and leave the timeline and albums | probe clean-up only |
+| `XwAOJf` | Move to trash | `[null, 1, [dedupKeys], 3]` | — ; items appear in `zy0IHe` (trash) and leave the timeline and albums | live-verified with synthetic items; through the extension: not yet |
+| `zy0IHe` | Trash listing | `[pageId]` | `[0]` rows, `[0][i][3]` dedupKey; no `[1]` on the last page | shape live-verified 2026-11-05 (read-only, 11 rows) |
 
 Location on upload: an uploaded JPEG's EXIF GPS becomes the item's location immediately
 (`fDcn4b[0][13][0]` = the EXIF coordinates ×1e7). EXIF `DateTimeOriginal` without an offset is
@@ -67,7 +68,7 @@ read as local time in an account zone (10:00 → 09:00Z in this account); Pixlix
 capture time explicitly with `DaSgWe` after upload, so this does not matter.
 
 Other RPCs seen in traffic or GPTK (not used yet): `swbisb` hash lookup (the web client calls
-it before uploading), `EtUHOe` location of existing items, `zy0IHe` trash listing.
+it before uploading), `EtUHOe` location of existing items.
 
 ## Media bytes
 

@@ -19,6 +19,7 @@ photos, ICE-style), saved right back into your library next to the originals.
 | **Create panorama**: select 2–40 overlapping photos → automatic alignment, projections (spherical, cylindrical, perspective, Panini, …), horizon straightening, exposure compensation, seamless blending, crop or fill edges, "flat surface" mode for posters/documents, save at full resolution (≤ 60 MP) | ✅ built — OpenCV + OpenStitching running locally (ADR-0005); verified in a sandbox, awaiting your test |
 | **Bulk operations** in the side panel, finding panoramas (and wrong dates) with live progress in a modal over Google Photos: date range, album, selection or whole library → groups of overlapping photos with previews → create the ones you pick in bulk. Each panorama gets the first photo's date and EXIF, the photos' location and description, and lands in the same albums | ✅ built — verified in a sandbox; library/album/description calls verified live; awaiting your test |
 | **Fix dates** from file names, on selected items or in a scan: review old and new dates, fix in place, read back, undo. **Settings** holds the formats you know (`IMG-yyyymmdd.*`), per account | ✅ built; bulk date writes not yet checked on a real library |
+| **Duplicates** in Bulk operations: photos that look the same, at a similarity you choose. The best copy is selected, the kept photo joins the copies' albums, the rest go to trash after a confirm | ✅ built; trash on a real library not yet verified |
 | Download results locally | ✅ built |
 | Standalone Fix, AI Studio, duplicates, metadata repair, HDR/focus stacking, video, vault, agent API | 🗺️ planned — see [FEATURES.md](docs/roadmap/FEATURES.md) |
 
@@ -34,7 +35,7 @@ npm run build
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
 choose the `dist/` folder. Open https://photos.google.com and look for the **✦ Pixlixir**
 chip in the bottom-right corner. Step-by-step tests: [Split](docs/testing/MANUAL-TEST-split.md) ·
-[Panorama](docs/testing/MANUAL-TEST-panorama.md) · [Scan library](docs/testing/MANUAL-TEST-scan.md) · [Wrong dates](docs/testing/MANUAL-TEST-dates.md).
+[Panorama](docs/testing/MANUAL-TEST-panorama.md) · [Scan library](docs/testing/MANUAL-TEST-scan.md) · [Duplicates](docs/testing/MANUAL-TEST-duplicates.md) · [Wrong dates](docs/testing/MANUAL-TEST-dates.md).
 
 The first build downloads the panorama engine (Pyodide, OpenCV, OpenStitching — ~26 MB,
 pinned and sha256-verified, ~27 MB with Pillow for EXIF) into `vendor/` and ships it inside `dist/`.

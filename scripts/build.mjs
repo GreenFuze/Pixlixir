@@ -1,10 +1,10 @@
-// Builds the unpacked extension into dist/. Usage: node scripts/build.mjs [--watch]
+// Builds the unpacked extension into dist/. Usage: node scripts/build.mjs [--watch] [--out=folder]
 import * as esbuild from "esbuild";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { IconFactory } from "./icons.mjs";
 import { PyodideVendor } from "./vendor-pyodide.mjs";
 
-const OUT = "dist";
+const OUT = process.argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "dist";
 const watch = process.argv.includes("--watch");
 
 // Paragraph: clean output and copy static assets.

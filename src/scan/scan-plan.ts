@@ -14,7 +14,7 @@ export interface ScanPlan {
 export class ScanPlans {
   /** Fixing the dates of chosen items, without looking for anything else. */
   static datesOf(mediaKeys: string[]): ScanPlan {
-    return { scope: { kind: "selection", mediaKeys }, detectors: { panorama: false, dates: true }, recheck: false };
+    return { scope: { kind: "selection", mediaKeys }, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false };
   }
 
   static isoDate(d: Date): string {

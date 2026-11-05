@@ -94,6 +94,16 @@ export class MockPhotosAdapter implements PhotosLibraryAdapter {
     return [...this.#items.values()].filter((i) => mediaKeys.includes(i.ref.mediaKey)).map((i) => ({ mediaKey: i.ref.mediaKey, fileName: i.fileName, takenAtMs: i.takenAtMs, timezoneOffsetMs: i.timezoneOffsetMs }));
   }
 
+  readonly trashed = new Set<string>();
+
+  async moveToTrash(dedupKeys: readonly string[]): Promise<void> {
+    for (const k of dedupKeys) this.trashed.add(k);
+  }
+
+  async listTrash(_page: string | null): Promise<Page<string>> {
+    return { items: [...this.trashed], next: null };
+  }
+
   async setDates(changes: readonly DateChange[]): Promise<void> {
     for (const change of changes) {
       const item = [...this.#items.values()].find((i) => i.dedupKey === change.dedupKey);

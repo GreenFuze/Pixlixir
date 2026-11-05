@@ -41,6 +41,14 @@ export class PhotosGateway {
     await this.call({ type: "photos.setDates", changes });
   }
 
+  async moveToTrash(dedupKeys: string[]): Promise<void> {
+    await this.call({ type: "photos.moveToTrash", dedupKeys });
+  }
+
+  listTrash(page: string | null): Promise<Page<string>> {
+    return this.call({ type: "photos.listTrash", page });
+  }
+
   async downloadOriginal(mediaKey: string): Promise<Blob> {
     const r = await this.call({ type: "photos.downloadOriginal", mediaKey });
     return new Blob([Base64.decode(r.bytesBase64) as Uint8Array<ArrayBuffer>], { type: r.mimeType });

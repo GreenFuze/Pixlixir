@@ -6,12 +6,14 @@
  * the page and in the side panel's recent work.
  */
 
+import pLimit from "p-limit";
 import type { LibraryItem } from "../../domain/types.js";
 import { DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../scan/date-fix.js";
+import { DuplicateGrouper, DuplicatePlans, DuplicatesDetector, DuplicateSimilarity, DuplicateTrasher, type DuplicateGroup, type DuplicateIndex, type DuplicateMember, type PhotoPrint } from "../../scan/duplicates.js";
 import { FilenameFormats } from "../../scan/filename-format.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
 import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js";
-import { PanoramaDetector, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
+import { PanoramaDetector, ScanConcurrency, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
 import { ScanEta } from "../../scan/scan-eta.js";
 import type { DetectorId, ScanDetector } from "../../scan/scan-detector.js";
 import type { ScanPlan } from "../../scan/scan-plan.js";
@@ -23,10 +25,12 @@ import { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
 import { PanoramaSession } from "../editor/panorama/panorama-session.js";
 import { PhotosGateway } from "../editor/photos-gateway.js";
 import { FormatStore } from "../storage/format-store.js";
-import { JobStore, type DateFixJob, type PanoramaJob } from "../storage/job-store.js";
+import { JobStore, type DateFixJob, type DuplicateTrashJob, type PanoramaJob } from "../storage/job-store.js";
 import { ScanStore } from "../storage/scan-store.js";
 import { SCAN_SELECTION_PREFIX, type ScanHandover } from "../tools.js";
 
+import { PanoramaOriginals } from "../editor/panorama/panorama-originals.js";
+import { CanvasPhotoPrinter } from "./canvas-photo-printer.js";
 import { PanoramaBulkCreator } from "./panorama-bulk-creator.js";
 import { EngineOverlapChecker } from "./engine-overlap-checker.js";
 
@@ -45,7 +49,7 @@ export interface CandidateView {
   selected: boolean;
   status: CandidateStatus;
   step: string | null;
-  result: { webUrl: string; width: number; height: number; albums: string[]; problems: string[]; skipped: number; warnings: string[] } | null;
+  result: { job: PanoramaJob; webUrl: string; width: number; height: number; albums: string[]; problems: string[]; skipped: number; warnings: string[] } | null;
   error: SerializedError | null;
 }
 
@@ -56,11 +60,28 @@ export interface DateFixView {
   thumbUrl: string | null;
 }
 
+/** The duplicates results: one index, grouped live at the chosen similarity. */
+export interface DuplicatesView {
+  index: DuplicateIndex;
+  similarity: number;
+  choices: Record<string, "keep" | "trash">;
+  /** Dedup keys of copies already in the trash. */
+  gone: string[];
+  /** How many groups are listed (the rest behind "Show more"). */
+  shown: number;
+  thumbs: Record<string, string>;
+  error: SerializedError | null;
+  /** Groups left alone in the last run. */
+  skippedShared: number;
+  problems: SerializedError[];
+}
+
 export type ScanPhase =
   | { name: "scanning"; step: string; done: number | null; total: number | null; secondsLeft: number | null }
   | { name: "review" }
   | { name: "creating"; done: number; total: number }
   | { name: "fixingDates"; done: number; total: number }
+  | { name: "trashing"; done: number; total: number }
   | { name: "failed"; error: SerializedError };
 
 export interface ScanSnapshot {
@@ -68,6 +89,8 @@ export interface ScanSnapshot {
   phase: ScanPhase;
   /** What this scan looks for. */
   detectors: Record<DetectorId, boolean>;
+  /** The result tab on show: the first to find something, until the user picks one. */
+  tab: DetectorId | null;
   summary: ScanSummary | null;
   /** What the last scan looked through, in words. */
   scopeLabel: string;
@@ -82,6 +105,7 @@ export interface ScanSnapshot {
   /** How many date rows are listed (the rest behind "Show more"). */
   dateFixesShown: number;
   dateFixError: SerializedError | null;
+  duplicates: DuplicatesView | null;
   /** A run that can be undone. */
   undoableDateFix: boolean;
   /** One group open in the Create-panorama editor, inside this modal. */
@@ -92,6 +116,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   static readonly THUMB_SIDE = 160;
   static readonly DATE_ROWS_PER_PAGE = 100;
   static readonly DATE_THUMB_SIDE = 96;
+  static readonly DUPLICATE_GROUPS_PER_PAGE = 50;
 
   readonly #gateway: PhotosGateway;
   readonly #worker: PanoramaWorkerClient;
@@ -103,12 +128,16 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   #lastActivity: string | null = null;
   #dateJob: DateFixJob | null = null;
   #plan: ScanPlan | null = null;
+  /** Engines that only live while a scan runs: each holds a whole Python runtime in memory. */
+  #scanEngines: PanoramaWorkerClient[] = [];
+  #duplicateGroups: { index: DuplicateIndex; similarity: number; gone: string[]; groups: DuplicateGroup[] } | null = null;
 
   constructor(params: ScanParams) {
     super({
       params,
       phase: { name: "scanning", step: "Starting", done: null, total: null, secondsLeft: null },
-      detectors: { panorama: false, dates: false },
+      detectors: { panorama: false, dates: false, duplicates: false },
+      tab: null,
       summary: null,
       scopeLabel: "",
       scanError: null,
@@ -119,6 +148,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       dateFixes: [],
       dateFixesShown: ScanSession.DATE_ROWS_PER_PAGE,
       dateFixError: null,
+      duplicates: null,
       undoableDateFix: false,
       editor: null,
     });
@@ -140,6 +170,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   dispose(): void {
     this.#scan?.abort();
     this.snapshot.editor?.session.dispose();
+    this.disposeScanEngines();
     this.#worker.dispose();
     this.#store?.close();
     this.#results?.close();
@@ -183,7 +214,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   async startScan(): Promise<void> {
     // Paragraph: fresh state, chosen detectors.
     this.revokeAll();
-    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null, ...ScanSession.noDateFixes() });
+    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null, tab: null, duplicates: null, ...ScanSession.noDateFixes() });
     this.#dateJob = null;
     const ctrl = new AbortController();
     this.#scan = ctrl;
@@ -209,7 +240,11 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
           this.set({ phase: { name: "scanning", step, done: done ?? null, total: total ?? null, secondsLeft: counted ? eta.update(done, total, Date.now()) : null } });
           this.reportActivity(counted && total > 0 ? `Scanning ${Math.floor((done / total) * 100)}%` : "Scanning…");
         },
-      }, (finding) => (finding.detector === "dates" ? this.addDateFix(finding as DateFixFinding) : this.addCandidate(finding as PanoramaCandidate)));
+      }, (finding) => {
+        if (finding.detector === "dates") this.addDateFix(finding as DateFixFinding);
+        else if (finding.detector === "duplicates") this.setDuplicates(finding as DuplicateIndex);
+        else this.addCandidate(finding as PanoramaCandidate);
+      });
       this.set({ phase: { name: "review" }, summary, progress: null });
       this.reportActivity("Scan results");
       void this.loadDateThumbs();
@@ -220,12 +255,27 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       this.set({ phase: { name: "review" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
       this.reportActivity("Scan results");
     } finally {
+      this.disposeScanEngines();
       this.#scan = null;
     }
   }
 
+  private disposeScanEngines(): void {
+    for (const engine of this.#scanEngines) engine.dispose();
+    this.#scanEngines = [];
+  }
+
   stopScan(): void {
     this.#scan?.abort();
+  }
+
+  chooseTab(tab: DetectorId): void {
+    this.set({ tab });
+  }
+
+  private isRunning(): boolean {
+    const { name } = this.snapshot.phase;
+    return name === "scanning" || name === "creating" || name === "fixingDates" || name === "trashing";
   }
 
   /** Cheap checks first, so their findings appear before the stitching engine starts. */
@@ -237,11 +287,18 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       const formats = new FilenameFormats(await new FormatStore(params.email).load());
       detectors.push(new FilenameDateDetector(this.#gateway, formats, this.results().cache<string>(params.email, "dates")) as ScanDetector);
     }
+    if (chosen.duplicates) {
+      const prints = this.results().cache<PhotoPrint>(params.email, "duplicates");
+      detectors.push(new DuplicatesDetector(new CanvasPhotoPrinter(this.#gateway), this.#gateway, prints, recheck) as ScanDetector);
+    }
     if (chosen.panorama) {
       const saved = await this.store().savedPanoramas(params.email);
-      const checker = new EngineOverlapChecker(this.#gateway, this.#worker, () => this.#nextKey++, (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
+      const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+      const downloads = pLimit(EngineOverlapChecker.PARALLEL_DOWNLOADS);
+      this.#scanEngines = Array.from({ length: ScanConcurrency.engines(navigator.hardwareConcurrency, memory) }, () => new PanoramaWorkerClient(() => {}));
+      const checkers = this.#scanEngines.map((engine) => new EngineOverlapChecker(this.#gateway, engine, downloads, () => this.#nextKey++, (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE)));
       const cache = this.results().cache<SavedSequence>(params.email, "panorama");
-      detectors.push(new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items), cache, recheck) as ScanDetector);
+      detectors.push(new PanoramaDetector(checkers, (items) => ScanSession.alreadyMade(saved, items), cache, recheck) as ScanDetector);
     }
     return detectors;
   }
@@ -256,8 +313,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   /** Closes right away unless work is running, which needs a confirmation first. */
   requestClose(): void {
-    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating" || this.snapshot.phase.name === "fixingDates";
-    if (running) this.set({ confirmingClose: true });
+    if (this.isRunning()) this.set({ confirmingClose: true });
     else this.close();
   }
 
@@ -276,8 +332,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
    * running, and a date run that can still be undone, since closing it loses the Undo.
    */
   private reportActivity(label: string | null): void {
-    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating" || this.snapshot.phase.name === "fixingDates";
-    const activity = label === null ? null : { label, busy: running || this.snapshot.undoableDateFix };
+    const activity = label === null ? null : { label, busy: this.isRunning() || this.snapshot.undoableDateFix };
     const key = JSON.stringify(activity);
     if (key === this.#lastActivity) return;
     this.#lastActivity = key;
@@ -321,7 +376,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       const { webUrl, width, height } = job.saved;
       this.patchCandidate(editor.candidateId, () => ({
         status: "created", selected: false, error: null,
-        result: { webUrl, width, height, albums: published.albumsAdded.map((a) => a.title), problems: published.problems.map((p) => p.message), skipped: 0, warnings: [] },
+        result: { job: editor.session.snapshot.job!, webUrl, width, height, albums: published.albumsAdded.map((a) => a.title), problems: published.problems.map((p) => p.message), skipped: 0, warnings: [] },
       }));
     }
     editor.session.dispose();
@@ -413,7 +468,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   }
 
   private addDateFix(finding: DateFixFinding): void {
-    this.set({ dateFixes: [...this.snapshot.dateFixes, { finding, selected: true, fixed: false, thumbUrl: null }] });
+    this.set({ dateFixes: [...this.snapshot.dateFixes, { finding, selected: true, fixed: false, thumbUrl: null }], tab: this.snapshot.tab ?? "dates" });
   }
 
   private markDatesFixed(mediaKeys: ReadonlySet<string>, fixed: boolean): void {
@@ -466,7 +521,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
         const r = await creator.create(this.view(id).candidate, (step) => this.patchCandidate(id, () => ({ step })));
         this.patchCandidate(id, () => ({
           status: "created", step: null, selected: false, error: null,
-          result: { webUrl: r.job.saved!.webUrl, width: r.width, height: r.height, albums: r.published.albumsAdded.map((a) => a.title), problems: r.published.problems.map((p) => p.message), skipped: r.skipped.length, warnings: r.warnings },
+          result: { job: r.job, webUrl: r.job.saved!.webUrl, width: r.width, height: r.height, albums: r.published.albumsAdded.map((a) => a.title), problems: r.published.problems.map((p) => p.message), skipped: r.skipped.length, warnings: r.warnings },
         }));
       } catch (err) {
         const e = EditorSession.toError(err, "Could not create this panorama");
@@ -477,6 +532,160 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       this.reportActivity(`Creating ${Math.min(i + 2, todo.length)}/${todo.length}`);
     }
     this.set({ phase: { name: "review" }, progress: null });
+    this.reportActivity("Scan results");
+  }
+
+  // ---- duplicates ----------------------------------------------------------------------
+
+  private setDuplicates(index: DuplicateIndex): void {
+    if (index.links.length === 0) return;
+    this.set({
+      duplicates: { index, similarity: DuplicateSimilarity.DEFAULT_PERCENT, choices: {}, gone: [], shown: ScanSession.DUPLICATE_GROUPS_PER_PAGE, thumbs: {}, error: null, skippedShared: 0, problems: [] },
+      tab: this.snapshot.tab ?? "duplicates",
+    });
+    void this.loadDuplicateThumbs();
+  }
+
+  /** The groups at the current similarity (grouped once per change). */
+  duplicateGroups(): DuplicateGroup[] {
+    const view = this.snapshot.duplicates;
+    if (!view) return [];
+    const memo = this.#duplicateGroups;
+    if (memo && memo.index === view.index && memo.similarity === view.similarity && memo.gone === view.gone) return memo.groups;
+    const groups = DuplicateGrouper.groups(view.index, view.similarity, new Set(view.gone));
+    this.#duplicateGroups = { index: view.index, similarity: view.similarity, gone: view.gone, groups };
+    return groups;
+  }
+
+  setDuplicateSimilarity(similarity: number): void {
+    const view = this.snapshot.duplicates;
+    if (!view) return;
+    this.set({ duplicates: { ...view, similarity, shown: ScanSession.DUPLICATE_GROUPS_PER_PAGE } });
+    void this.loadDuplicateThumbs();
+  }
+
+  showMoreDuplicates(): void {
+    const view = this.snapshot.duplicates;
+    if (!view) return;
+    this.set({ duplicates: { ...view, shown: view.shown + ScanSession.DUPLICATE_GROUPS_PER_PAGE } });
+    void this.loadDuplicateThumbs();
+  }
+
+  /** Flips one photo, unless that would leave its group with nothing to keep. */
+  toggleDuplicate(group: DuplicateGroup, member: DuplicateMember): void {
+    const view = this.snapshot.duplicates;
+    if (!view || member.photo.item.editable === false) return;
+    const choices = { ...view.choices, [member.photo.item.dedupKey]: DuplicatePlans.goes(group, member, view.choices) ? "keep" as const : "trash" as const };
+    if (group.members.every((m) => DuplicatePlans.goes(group, m, choices))) return;
+    this.set({ duplicates: { ...view, choices } });
+  }
+
+  /** All: back to the automatic choice. None: nothing goes. */
+  chooseAllDuplicates(trash: boolean): void {
+    const view = this.snapshot.duplicates;
+    if (!view) return;
+    const choices: Record<string, "keep"> = {};
+    if (!trash) for (const g of this.duplicateGroups()) for (const m of g.members) choices[m.photo.item.dedupKey] = "keep";
+    this.set({ duplicates: { ...view, choices } });
+  }
+
+  duplicatesToTrash(): number {
+    const view = this.snapshot.duplicates;
+    if (!view) return 0;
+    return this.duplicateGroups().reduce((n, g) => n + (DuplicatePlans.plan(g, view.choices)?.trash.length ?? 0), 0);
+  }
+
+  /** Moves the ticked copies to trash, after the user confirmed. */
+  async trashDuplicates(): Promise<void> {
+    const view = this.snapshot.duplicates;
+    if (!view) return;
+    const plans = this.duplicateGroups().flatMap((g) => DuplicatePlans.plan(g, view.choices) ?? []);
+    const dedupKeys = plans.flatMap((p) => p.trash.map((i) => i.dedupKey));
+    if (dedupKeys.length === 0) return;
+
+    // Paragraph: the record comes before the first move.
+    const now = Date.now();
+    let job = await this.store().put<DuplicateTrashJob>({ id: crypto.randomUUID(), kind: "duplicateTrash", accountEmail: this.snapshot.params.email, sourceMediaKey: plans[0]!.trash[0]!.mediaKey, dedupKeys, moved: [], status: "saving", error: null, createdAt: now, updatedAt: now });
+    const patch = (p: Partial<DuplicatesView>) => this.set({ duplicates: { ...this.snapshot.duplicates!, ...p } });
+    patch({ error: null, skippedShared: 0, problems: [] });
+    this.set({ phase: { name: "trashing", done: 0, total: dedupKeys.length } });
+    this.reportActivity("Moving to trash");
+
+    // Paragraph: what reached the trash leaves the list at once, even if a later batch fails.
+    try {
+      const r = await new DuplicateTrasher(this.#gateway).run(plans, (done, total) => this.set({ progress: `Preparing group ${done + 1} of ${total}` }), async (keys) => {
+        job = await this.store().put<DuplicateTrashJob>({ ...job, moved: [...job.moved, ...keys] });
+        patch({ gone: [...this.snapshot.duplicates!.gone, ...keys] });
+        this.set({ progress: null, phase: { name: "trashing", done: job.moved.length, total: dedupKeys.length } });
+      });
+      patch({ skippedShared: r.skippedShared, problems: r.problems });
+      await this.store().put<DuplicateTrashJob>({ ...job, status: job.moved.length === dedupKeys.length ? "done" : "partial" });
+    } catch (err) {
+      const e = EditorSession.toError(err, "Could not move the photos to trash");
+      await this.store().put<DuplicateTrashJob>({ ...job, status: job.moved.length > 0 ? "partial" : "failed", error: e.toJSON() });
+      patch({ error: e.toJSON() });
+    }
+    this.set({ phase: { name: "review" }, progress: null });
+    this.reportActivity("Scan results");
+  }
+
+  /** Small images for the listed groups, a few at a time. A thumbnail that fails only leaves a blank. */
+  private async loadDuplicateThumbs(): Promise<void> {
+    const view = this.snapshot.duplicates;
+    if (!view) return;
+    const pending = this.duplicateGroups().slice(0, view.shown).flatMap((g) => g.members.map((m) => m.photo.item)).filter((i) => !view.thumbs[i.dedupKey]);
+    const next = pending[Symbol.iterator]();
+    const worker = async () => {
+      for (const item of next) {
+        try {
+          const blob = await this.#gateway.thumbnail(item.baseUrl, CanvasPhotoPrinter.READ_SIDE * 2);
+          const current = this.snapshot.duplicates;
+          if (current?.index === view.index) this.set({ duplicates: { ...current, thumbs: { ...current.thumbs, [item.dedupKey]: URL.createObjectURL(blob) } } });
+        } catch (err) {
+          console.error("[pixlixir] could not load a thumbnail", err);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  }
+
+  // ---- originals of created panoramas --------------------------------------------------
+
+  /** Created panoramas whose photos are still in the library. */
+  withOriginals(): CandidateView[] {
+    return this.snapshot.candidates.filter((c) => c.result && ScanSession.trashableKeys(c).length > 0);
+  }
+
+  /** Only photos that are in the panorama, belong to this account and are not in the trash yet. */
+  static trashableKeys(view: Pick<CandidateView, "candidate" | "result">): string[] {
+    const notOwned = new Set(view.candidate.items.filter((i) => i.editable === false).map((i) => i.dedupKey));
+    const moved = new Set(view.result?.job.originalsTrash?.moved ?? []);
+    return (view.result?.job.usedDedupKeys ?? []).filter((k) => !notOwned.has(k) && !moved.has(k));
+  }
+
+  /** Moves the originals of these panoramas to trash, after the user confirmed. One failure stops the run. */
+  async trashOriginals(ids: readonly string[]): Promise<void> {
+    const views = ids.map((id) => this.view(id));
+    const total = views.reduce((n, v) => n + ScanSession.trashableKeys(v).length, 0);
+    if (total === 0) return;
+    const originals = new PanoramaOriginals(this.#gateway, this.store());
+    let done = 0;
+    this.set({ phase: { name: "trashing", done, total } });
+    this.reportActivity("Moving to trash");
+
+    // Paragraph: one panorama at a time, each confirmed in the library first.
+    for (const view of views) {
+      const id = view.candidate.id;
+      const before = done;
+      const already = view.result!.job.originalsTrash?.moved.length ?? 0;
+      const r = await originals.trash(view.result!.job, ScanSession.trashableKeys(view), (moved) => {
+        this.set({ phase: { name: "trashing", done: before + moved - already, total } });
+      });
+      done += (r.job.originalsTrash?.moved.length ?? already) - already;
+      this.patchCandidate(id, (c) => ({ result: { ...c.result!, job: r.job }, error: r.error?.toJSON() ?? null }));
+      if (r.error) break;
+    }
+    this.set({ phase: { name: "review" } });
     this.reportActivity("Scan results");
   }
 
@@ -491,7 +700,9 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const view: CandidateView = { candidate: c, previewUrl: URL.createObjectURL(c.preview.image), selected: c.alreadyMade === null, status: "found", step: null, result: null, error: null };
     const thumbs = { ...this.snapshot.thumbs };
     for (const [key, blob] of Object.entries(c.thumbs)) thumbs[key] ??= URL.createObjectURL(blob);
-    this.set({ candidates: [...this.snapshot.candidates, view], thumbs });
+    // Engines finish in any order; the list stays in capture order.
+    const candidates = [...this.snapshot.candidates, view].sort((a, b) => a.candidate.items[0]!.takenAtMs - b.candidate.items[0]!.takenAtMs);
+    this.set({ candidates, thumbs, tab: this.snapshot.tab ?? "panorama" });
   }
 
   private view(id: string): CandidateView {
@@ -518,6 +729,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     for (const c of this.snapshot.candidates) URL.revokeObjectURL(c.previewUrl);
     for (const url of Object.values(this.snapshot.thumbs)) URL.revokeObjectURL(url);
     for (const d of this.snapshot.dateFixes) if (d.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+    for (const url of Object.values(this.snapshot.duplicates?.thumbs ?? {})) URL.revokeObjectURL(url);
   }
 
   /**

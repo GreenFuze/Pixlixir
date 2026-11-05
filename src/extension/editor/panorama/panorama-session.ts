@@ -16,6 +16,7 @@ import { CanvasCodec } from "../canvas-codec.js";
 import { EditorSession, type EditorParams } from "../editor-session.js";
 import { PhotosGateway } from "../photos-gateway.js";
 import { PanoramaWorkerClient } from "./panorama-client.js";
+import { PanoramaOriginals } from "./panorama-originals.js";
 import { MetadataInheritance, PanoramaPublisher, PanoramaSourceLoader, type InheritedMetadata, type PublishChoices, type PublishedPanorama } from "./panorama-pipeline.js";
 import type { PanoramaRender } from "./panorama-worker.js";
 
@@ -71,6 +72,8 @@ export interface PanoramaSnapshot {
   job: PanoramaJob | null;
   saveDraft: SaveDraft | null;
   published: PublishedPanorama | null;
+  /** Moving the photos in a saved panorama to trash. */
+  originals: { moving: boolean; error: SerializedError | null };
 }
 
 export class PanoramaSession extends EditorSession<PanoramaSnapshot> {
@@ -102,6 +105,7 @@ export class PanoramaSession extends EditorSession<PanoramaSnapshot> {
       job: null,
       saveDraft: null,
       published: null,
+      originals: { moving: false, error: null },
     });
     this.#worker = new PanoramaWorkerClient((stage) => this.set({ progress: stage }));
     this.#gateway = new PhotosGateway(params.email, params.tabId);
@@ -323,6 +327,26 @@ export class PanoramaSession extends EditorSession<PanoramaSnapshot> {
     } catch (err) {
       this.set({ phase: { name: "ready" }, progress: null, previewError: EditorSession.failure(err) });
     }
+  }
+
+  /** Photos of the saved panorama that are not in the trash yet. */
+  private trashableKeys(): string[] {
+    const { job } = this.snapshot;
+    const moved = new Set(job?.originalsTrash?.moved ?? []);
+    return job?.saved ? (job.usedDedupKeys ?? []).filter((k) => !moved.has(k)) : [];
+  }
+
+  trashablePhotos(): number {
+    return this.trashableKeys().length;
+  }
+
+  /** Moves the photos in the saved panorama to trash, after the user confirmed. */
+  async trashOriginals(): Promise<void> {
+    const { job } = this.snapshot;
+    if (!job || !this.#store) throw new PixError(ErrorCode.StorageFailed, "No panorama job is open");
+    this.set({ originals: { moving: true, error: null } });
+    const r = await new PanoramaOriginals(this.#gateway, this.#store).trash(job, this.trashableKeys());
+    this.set({ job: r.job, originals: { moving: false, error: r.error?.toJSON() ?? null } });
   }
 
   private inherit(): Promise<InheritedMetadata> {
