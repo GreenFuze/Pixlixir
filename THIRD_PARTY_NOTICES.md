@@ -30,6 +30,7 @@ re-running the vendor step with your build.
 | Package | License | Use |
 |---|---|---|
 | exifreader | MPL-2.0 | Tests read back the EXIF written into panoramas |
+| playwright | Apache-2.0 | End-to-end tests of the real extension in Chromium |
 
 ## Research references (no code copied)
 

@@ -42,8 +42,12 @@ export interface PhotosLibraryAdapter {
   capabilities(): Capability[];
 }
 
-/** Base URLs handed to fetchThumbnail must point at Google's image CDN (never an arbitrary URL). */
-export const CONTENT_URL = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\/[^\s]+$/;
+/**
+ * Base URLs handed to fetchThumbnail must point at Google's image hosts (never an arbitrary URL).
+ * Live listings use photos.fife.usercontent.google.com/pw/… (verified 2026-11-05);
+ * *.googleusercontent.com is the older form still seen in other responses.
+ */
+export const CONTENT_URL = /^https:\/\/(?:[a-z0-9-]+\.googleusercontent\.com|[a-z0-9.-]+\.usercontent\.google\.com)\/[^\s]+$/;
 
 export type Rendition = { kind: "original" } | { kind: "fit"; maxWidth: number; maxHeight: number };
 

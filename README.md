@@ -17,7 +17,7 @@ photos, ICE-style), saved right back into your library next to the originals.
 | **Split into Photos**: auto-detect prints (also on patterned cloth / album pages, with perspective), adjust/add/remove/rotate, save as new items dated like the scan | ✅ built — protocol steps verified live, awaiting your end-to-end test |
 | **Fix** (separate feature, hosted by Split for now): colour restore (or keep original tones), lighting & shadow correction measured from the surface around the prints, glare reduction (auto hotspots + Glare brush), dust & scratches, Repair brush, Protect brush, sharpen, before/after | ✅ built — local processing; a standalone "Fix a photo" tool is planned |
 | **Create panorama**: select 2–40 overlapping photos → automatic alignment, projections (spherical, cylindrical, perspective, Panini, …), horizon straightening, exposure compensation, seamless blending, crop or fill edges, "flat surface" mode for posters/documents, save at full resolution (≤ 60 MP) | ✅ built — OpenCV + OpenStitching running locally (ADR-0005); verified in a sandbox, awaiting your test |
-| **Scan library** for panoramas: date range, album, selection or whole library → groups of overlapping photos with previews → create the ones you pick in bulk. Each panorama gets the first photo's date and EXIF, the photos' location and description, and lands in the same albums | ✅ built — verified in a sandbox; library/album/description calls verified live; awaiting your test |
+| **Scan library** for panoramas, in a modal over Google Photos with live progress: date range, album, selection or whole library → groups of overlapping photos with previews → create the ones you pick in bulk. Each panorama gets the first photo's date and EXIF, the photos' location and description, and lands in the same albums | ✅ built — verified in a sandbox; library/album/description calls verified live; awaiting your test |
 | Download results locally | ✅ built |
 | Standalone Fix, AI Studio, duplicates, metadata repair, HDR/focus stacking, video, vault, agent API | 🗺️ planned — see [FEATURES.md](docs/roadmap/FEATURES.md) |
 
@@ -44,6 +44,7 @@ pinned and sha256-verified, ~27 MB with Pillow for EXIF) into `vendor/` and ship
 |---|---|
 | `npm run build` / `npm run watch` | Build the unpacked extension into `dist/` |
 | `npm test` | Unit, contract and panorama-engine integration tests (Vitest; vendors the engine first) |
+| `npm run test:e2e` | The real build in real Chromium against a fake Google backend (Playwright; first run `npx playwright install chromium`) |
 | `npm run vendor` | Download/verify the pinned panorama engine files into `vendor/pyodide/` |
 | `npm run dev:serve` | Serve the repo with the extension's CSP for the editor sandboxes ([tools/dev](tools/dev/README.md)) |
 | `npm run typecheck` | Strict TypeScript |

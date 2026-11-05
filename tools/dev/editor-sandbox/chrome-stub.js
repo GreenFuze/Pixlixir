@@ -85,12 +85,14 @@
       return ok({ ref: { accountEmail: msg.expectedEmail, mediaKey: key }, dedupKey: `dedup-upload-${uploads.length}`, width: 0, height: 0, webUrl: `#sandbox-upload-${uploads.length}` });
     }
     if (msg.type === "photos.addToAlbum") { albumAdds.push({ mediaKeys: msg.mediaKeys, album: msg.album.title }); window.__sandboxAlbumAdds = albumAdds; return ok(null); }
+    if (msg.type.startsWith("modal.")) { (window.__sandboxModal ??= []).push(msg); return ok(null); }
     if (msg.type === "photos.setDescription") { descriptions.push({ dedupKey: msg.dedupKey, description: msg.description }); window.__sandboxDescriptions = descriptions; return ok(null); }
     return fail("NO_HANDLER", `sandbox: unhandled ${msg.type}`);
   }
 
   // Paragraph: session storage holds a pretend selection (all newspaper shots + the lone photo) under id "sandbox".
-  const session = { "pixlixir.scanSelection.sandbox": library.filter((i) => /newspaper|prints/.test(i.file)).map((i) => i.mediaKey) };
+  const accountEmail = params.get("email");
+  const session = { "pixlixir.scanSelection.sandbox": { accountEmail, mediaKeys: library.filter((i) => /newspaper|prints/.test(i.file)).map((i) => i.mediaKey) }, "pixlixir.scanSelection.none": { accountEmail, mediaKeys: [] } };
 
   window.chrome = {
     runtime: {
@@ -103,6 +105,6 @@
       getURL: (p) => `/dist/${p}`,
     },
     tabs: { sendMessage: (_tabId, msg) => photos(msg) },
-    storage: { session: { get: async (k) => ({ [k]: session[k] }), set: async (o) => Object.assign(session, o) } },
+    storage: { session: { get: async (k) => ({ [k]: session[k] }), set: async (o) => Object.assign(session, o), remove: async (k) => { delete session[k]; } } },
   };
 })();

@@ -72,6 +72,7 @@ it before uploading), `EtUHOe` location of existing items, `zy0IHe` trash listin
 
 | Rendition | Finding | Status |
 |---|---|---|
+| Base URL host | `photos.fife.usercontent.google.com/pw/…` on all 2,567 items of a live listing (2026-11-05); older responses and docs show `lh3.googleusercontent.com` | live-verified |
 | `baseUrl=wW-hH` | Resized JPEG | live-verified |
 | `baseUrl=d` | Full-resolution image (1868×4000 test item, ~1.42 MB vs ~1.42 MB `=s0`). **Requires the user's cookies: HTTP 403 with `credentials: "omit"`.** Works from the photos.google.com origin with `credentials: "include"`. | live-verified |
 | Byte-identity with the uploaded original | Not yet compared against a known original file | research |

@@ -60,6 +60,9 @@ export interface StitchResult {
   capped: boolean;
   /** Linear factor from this render to the photos' original resolution (1 for uncapped full renders). */
   scaleToFull: number;
+  /** Area of the output in units of one photo, and its short side in units of a photo's short side. */
+  viewGain: number;
+  shortSide: number;
   seconds: number;
   /** Non-fatal notes (e.g. EXIF that could not be copied). */
   warnings: string[];
@@ -191,6 +194,8 @@ export class StitchRuntime {
       fillOverlayPng: r.fill_png == null ? null : StitchRuntime.bytes(r.fill_png, "fill_png"),
       capped: Boolean(r.capped),
       scaleToFull: Number(r.scale_to_full),
+      viewGain: Number(r.view_gain),
+      shortSide: Number(r.short_side),
       seconds: Number(r.seconds),
       warnings: (r.warnings as unknown[]).map(String),
     };

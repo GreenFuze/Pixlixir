@@ -63,7 +63,7 @@ export class PanoramaBulkCreator {
       step("Reading date, location and albums");
       const inherited = await MetadataInheritance.collect(this.gateway, loaded.map((s) => ({ mediaKey: s.mediaKey, takenAtMs: s.item.takenAtMs, timezoneOffsetMs: s.item.timezoneOffsetMs })));
       const earliest = loaded.find((s) => s.mediaKey === inherited.earliestMediaKey) ?? null;
-      const settings: StitchSettings = { ...DEFAULT_STITCH_SETTINGS, motion: candidate.preview?.motion ?? "rotate" };
+      const settings: StitchSettings = { ...DEFAULT_STITCH_SETTINGS, motion: candidate.preview.motion };
       step("Building the full-size panorama");
       const render = await this.worker.stitch(loaded.map((s) => s.key), settings, {
         kind: "full",

@@ -72,6 +72,19 @@ export class PhotosGateway {
     await this.call({ type: "photos.setDescription", dedupKey, description });
   }
 
+  async closeModal(): Promise<void> {
+    await this.call({ type: "modal.close" });
+  }
+
+  async minimizeModal(): Promise<void> {
+    await this.call({ type: "modal.minimize" });
+  }
+
+  /** Short status shown on the Photos tab's chip (null clears it). */
+  async reportActivity(label: string | null): Promise<void> {
+    await this.call({ type: "modal.activity", label });
+  }
+
   /** All albums of the account (follows every page). */
   async allAlbums(): Promise<AlbumRef[]> {
     const out: AlbumRef[] = [];

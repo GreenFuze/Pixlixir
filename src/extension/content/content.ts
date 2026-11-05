@@ -13,13 +13,16 @@ import { WizSessionReader } from "../../gphotos/protocol/session.js";
 import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import { Messenger, PageToContent, type ContentToBackground, type Envelope } from "../messaging/protocol.js";
+import { SCAN_PAGE } from "../tools.js";
 import { Launcher } from "./launcher.js";
+import { ToolModal } from "./tool-modal.js";
 
 class ContentApp {
   #adapter: PhotosLibraryAdapter | null = null;
   #sessionError: PixError | null = null;
   #selection: Selection = { kind: "none" };
   readonly #launcher: Launcher;
+  readonly #modal = new ToolModal(document);
   readonly #observer: SelectionObserver;
 
   constructor() {
@@ -27,6 +30,7 @@ class ContentApp {
       openPanel: () => void this.send({ type: "ui.openSidePanel" }),
       openTool: (tool, mediaKeys) => void this.send({ type: "ui.openTool", tool, mediaKeys }),
       openScan: (mediaKeys) => void this.send({ type: "ui.openScan", mediaKeys }),
+      showActivity: () => this.#modal.restore(),
     });
     this.#observer = new SelectionObserver(document, () => location.pathname, (sel) => {
       this.#selection = sel;
@@ -89,6 +93,21 @@ class ContentApp {
         return null;
       case "photos.setDescription":
         await adapter.setDescription(msg.dedupKey, msg.description);
+        return null;
+      case "modal.open":
+        // Only our own scan page may be framed here, whatever the message says.
+        if (!msg.url.startsWith(chrome.runtime.getURL(SCAN_PAGE))) throw new PixError(ErrorCode.InvalidMessage, "Refused to open an unexpected page.");
+        this.#modal.open(msg.url);
+        return null;
+      case "modal.minimize":
+        this.#modal.minimize();
+        return null;
+      case "modal.close":
+        this.#modal.close();
+        this.#launcher.setActivity(null);
+        return null;
+      case "modal.activity":
+        this.#launcher.setActivity(msg.label);
         return null;
     }
   }

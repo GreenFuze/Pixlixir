@@ -5,6 +5,7 @@
  */
 
 import type { LibraryItem } from "../domain/types.js";
+import type { SerializedError } from "../shared/errors.js";
 
 export type DetectorId = "panorama";
 
@@ -22,9 +23,19 @@ export interface ScanContext {
   progress(step: string, done?: number, total?: number): void;
 }
 
+/** How a detector's run went. */
+export interface DetectorStats {
+  /** Photos answered from saved results, without analysing them again. */
+  photosReused: number;
+  /** Photos analysed in this run. */
+  photosChecked: number;
+  /** Parts that could not be analysed (the rest of the scan continued). */
+  failures: SerializedError[];
+}
+
 export interface ScanDetector<F extends ScanFinding = ScanFinding> {
   readonly id: DetectorId;
   readonly label: string;
   readonly description: string;
-  analyze(items: readonly LibraryItem[], ctx: ScanContext, emit: (finding: F) => void): Promise<void>;
+  analyze(items: readonly LibraryItem[], ctx: ScanContext, emit: (finding: F) => void): Promise<DetectorStats>;
 }

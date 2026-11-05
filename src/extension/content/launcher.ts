@@ -4,13 +4,15 @@
  */
 
 import type { Selection } from "../../gphotos/dom/selection.js";
-import { ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { SCAN_HINT, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 export interface LauncherActions {
   openPanel(): void;
   openTool(tool: ToolId, mediaKeys: string[]): void;
   /** Opens the library scan; selected photos (if any) become its default scope. */
   openScan(mediaKeys: string[]): void;
+  /** Brings back a minimized scan. */
+  showActivity(): void;
 }
 
 const STYLE = `
@@ -22,6 +24,7 @@ const STYLE = `
   .menu button:hover:not([disabled]), .menu button:focus-visible { background: #3a2f63; }
   .menu button[disabled] { opacity: .45; cursor: default; }
   .hint { font-size: 11px; opacity: .7; padding: 4px 12px 6px; max-width: 220px; }
+  .activity { font-size: 12px; font-variant-numeric: tabular-nums; }
   .chip { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #7b4dff, #d24dff); box-shadow: 0 6px 20px rgba(123,77,255,.45); }
   .chip:focus-visible { outline: 3px solid #c9b6ff; outline-offset: 2px; }
   .badge { background: rgba(255,255,255,.25); border-radius: 999px; padding: 1px 7px; font-size: 11px; }
@@ -33,6 +36,8 @@ export class Launcher {
   readonly #root: ShadowRoot;
   readonly #menu: HTMLDivElement;
   readonly #badge: HTMLSpanElement;
+  readonly #activity: HTMLSpanElement;
+  #activityLabel: string | null = null;
   #selection: Selection = { kind: "none" };
   #problem: string | null = null;
 
@@ -54,8 +59,10 @@ export class Launcher {
     chip.textContent = "✦ Pixlixir";
     this.#badge = doc.createElement("span");
     this.#badge.className = "badge";
-    chip.append(this.#badge);
-    chip.addEventListener("click", () => this.toggle());
+    this.#activity = doc.createElement("span");
+    this.#activity.className = "activity";
+    chip.append(this.#badge, this.#activity);
+    chip.addEventListener("click", () => (this.#activityLabel ? this.actions.showActivity() : this.toggle()));
     wrap.append(this.#menu, chip);
     this.#root.append(style, wrap);
 
@@ -77,6 +84,14 @@ export class Launcher {
   setSelection(selection: Selection): void {
     this.#selection = selection;
     this.render();
+  }
+
+  /** Work running in the modal (e.g. "Scanning 34%"): shown on the chip, whose click then brings it back. */
+  setActivity(label: string | null): void {
+    this.#activityLabel = label;
+    this.#activity.textContent = label ?? "";
+    this.#activity.style.display = label ? "" : "none";
+    if (label) this.close();
   }
 
   setProblem(problem: string | null): void {
@@ -108,26 +123,19 @@ export class Launcher {
     }
     const eligible = TOOL_IDS.map((tool) => ({ tool, keys: ToolEligibility.mediaKeys(tool, items) }));
     for (const { tool, keys } of eligible) {
-      this.#menu.append(this.button(TOOLS[tool].label, keys === null || this.#problem !== null, () => keys && this.actions.openTool(tool, keys)));
+      this.#menu.append(this.button(TOOLS[tool].label, keys === null || this.#problem !== null, () => keys && this.actions.openTool(tool, keys), keys === null ? TOOLS[tool].hint : undefined));
     }
     const photoKeys = items.filter((i) => i.type !== "video").map((i) => i.mediaKey);
-    this.#menu.append(this.button(photoKeys.length > 1 ? `Scan ${photoKeys.length} selected for panoramas…` : "Scan library for panoramas…", this.#problem !== null, () => this.actions.openScan(photoKeys.length > 1 ? photoKeys : [])));
+    this.#menu.append(this.button(photoKeys.length > 1 ? `Scan ${photoKeys.length} selected…` : "Scan library…", this.#problem !== null, () => this.actions.openScan(photoKeys.length > 1 ? photoKeys : []), SCAN_HINT));
     this.#menu.append(this.button("Open Pixlixir panel", false, () => this.actions.openPanel()));
-    if (eligible.every((e) => e.keys === null)) {
-      for (const tool of TOOL_IDS) {
-        const hint = this.doc.createElement("div");
-        hint.className = "hint";
-        hint.textContent = TOOLS[tool].hint;
-        this.#menu.append(hint);
-      }
-    }
   }
 
-  private button(label: string, disabled: boolean, onClick: () => void): HTMLButtonElement {
+  private button(label: string, disabled: boolean, onClick: () => void, tooltip?: string): HTMLButtonElement {
     const b = this.doc.createElement("button");
     b.setAttribute("role", "menuitem");
     b.textContent = label;
     b.disabled = disabled;
+    if (tooltip) b.title = tooltip;
     b.addEventListener("click", () => {
       this.close();
       onClick();

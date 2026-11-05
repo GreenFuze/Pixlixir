@@ -7,7 +7,7 @@
 
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import { ContentToBackground, Messenger, PageToBackground, type PanelState, type TabState } from "../messaging/protocol.js";
-import { SCAN_PAGE, SCAN_SELECTION_PREFIX, TOOLS, type ToolId } from "../tools.js";
+import { SCAN_PAGE, SCAN_SELECTION_PREFIX, TOOLS, type ScanHandover, type ToolId } from "../tools.js";
 
 class TabRegistry {
   static readonly KEY = "pixlixir.tabs";
@@ -100,20 +100,21 @@ class BackgroundRouter {
   }
 
   /**
-   * Opens the library scan bound to the tab's account. A selection is parked in session
-   * storage (it can be thousands of keys); an album open in the tab preselects that album.
+   * Opens the library scan as a modal over that Photos tab, bound to its account. The
+   * selection (possibly thousands of keys) is parked in session storage under a one-time id,
+   * which the scan page requires: scan.html is reachable from photos.google.com, so a frame
+   * not opened through here refuses to start. An album open in the tab preselects that album.
    */
-  private async openScan(tabId: number, mediaKeys: string[]): Promise<{ scanTabId: number }> {
+  private async openScan(tabId: number, mediaKeys: string[]): Promise<null> {
     const email = await this.boundEmail(tabId);
-    const params: Record<string, string> = { tab: String(tabId), email };
-    if (mediaKeys.length > 0) {
-      const id = crypto.randomUUID();
-      await chrome.storage.session.set({ [SCAN_SELECTION_PREFIX + id]: mediaKeys });
-      params.sel = id;
-    }
+    const id = crypto.randomUUID();
+    await chrome.storage.session.set({ [SCAN_SELECTION_PREFIX + id]: { accountEmail: email, mediaKeys } satisfies ScanHandover });
+    const params: Record<string, string> = { tab: String(tabId), email, sel: id };
     const album = /\/album\/([A-Za-z0-9_-]{10,})/.exec((await chrome.tabs.get(tabId)).url ?? "")?.[1];
     if (album) params.album = album;
-    return { scanTabId: await this.openPage(SCAN_PAGE, tabId, params) };
+    const url = chrome.runtime.getURL(`${SCAN_PAGE}?${new URLSearchParams(params).toString()}`);
+    await Messenger.toPhotosTab(tabId, { type: "modal.open", expectedEmail: email, url });
+    return null;
   }
 
   private async boundEmail(tabId: number): Promise<string> {

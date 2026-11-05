@@ -6,7 +6,7 @@ import { LIVE_CAPABILITIES } from "../../gphotos/capabilities.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { Messenger, type PanelState } from "../messaging/protocol.js";
 import { JobStore, type PixJob } from "../storage/job-store.js";
-import { ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { SCAN_HINT, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 /** Actions shown for context but not yet built — labelled honestly. */
 const PLANNED = ["Fix a photo (restore, lighting, colour)", "Edit with AI", "Find duplicates", "Fix date & location", "HDR / focus stacking"];
@@ -16,9 +16,13 @@ class PanelModel {
     const win = await chrome.windows.getCurrent();
     if (win.id === undefined) throw new PixError(ErrorCode.Internal, "No current window");
     const state = await Messenger.toBackground({ type: "panel.getState", windowId: win.id });
+
+    // Paragraph: recent work of the account in the active Photos tab only.
+    const account = state.activeTab?.account?.email;
+    if (!account) return { state, jobs: [] };
     const store = await JobStore.open();
     try {
-      return { state, jobs: await store.recent(12) };
+      return { state, jobs: await store.recent(account, 12) };
     } finally {
       store.close();
     }
@@ -104,20 +108,17 @@ function App(props: { model: PanelModel }) {
 
           <section class="card">
             <div class="label">Selection</div>
-            <div>{items.length === 0 ? <span class="muted">Nothing selected. Select or open a photo.</span> : `${items.length} item${items.length === 1 ? "" : "s"} selected`}</div>
+            <div>{items.length === 0 ? <span class="muted">Nothing selected</span> : `${items.length} item${items.length === 1 ? "" : "s"} selected`}</div>
             {eligible.map(({ tool, keys }) => (
               <div class="actions" key={tool}>
-                <button class="btn primary" disabled={!keys || !tab?.account} onClick={() => keys && void openTool(tool, keys)}>{TOOLS[tool].label}</button>
-                {!keys && <span class="muted small">{TOOLS[tool].hint}</span>}
+                <button class="btn primary" title={keys ? undefined : TOOLS[tool].hint} disabled={!keys || !tab?.account} onClick={() => keys && void openTool(tool, keys)}>{TOOLS[tool].label}</button>
               </div>
             ))}
           </section>
 
           <section class="card">
-            <div class="label">Scan library</div>
-            <div class="muted small">Finds groups of overlapping photos in a date range, an album, your selection or the whole library, previews them, and creates the panoramas you pick.</div>
             <div class="actions">
-              <button class="btn" disabled={!tab?.account} onClick={() => void openScan()}>{photoKeys.length > 1 ? `Scan ${photoKeys.length} selected for panoramas…` : "Scan for panoramas…"}</button>
+              <button class="btn" title={SCAN_HINT} disabled={!tab?.account} onClick={() => void openScan()}>{photoKeys.length > 1 ? `Scan ${photoKeys.length} selected…` : "Scan library…"}</button>
             </div>
             <details class="planned">
               <summary class="muted small">Planned actions</summary>
@@ -137,7 +138,7 @@ function App(props: { model: PanelModel }) {
                 return (
                   <li key={j.id}>
                     <div>Panorama of {j.sourceMediaKeys.length} photos{j.batchId ? <span class="muted small"> · from a scan</span> : null}</div>
-                    <div class="muted small">{j.accountEmail} · {j.saved ? <a href={j.saved.webUrl} target="_blank" rel="noreferrer">open ↗</a> : "not saved"} · {status}</div>
+                    <div class="muted small">{j.saved ? <a href={j.saved.webUrl} target="_blank" rel="noreferrer">open ↗</a> : "not saved"} · {status}</div>
                   </li>
                 );
               }
@@ -145,7 +146,7 @@ function App(props: { model: PanelModel }) {
               return (
                 <li key={j.id}>
                   <div>Split {j.sourceFileName ?? "scan"}</div>
-                  <div class="muted small">{j.accountEmail} · {saved}/{j.prints.filter((p) => p.included).length} saved · {status}</div>
+                  <div class="muted small">{saved}/{j.prints.filter((p) => p.included).length} saved · {status}</div>
                 </li>
               );
             })}

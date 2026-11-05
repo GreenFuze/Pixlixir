@@ -108,9 +108,10 @@ export class JobStore {
     return stored;
   }
 
-  async get(id: string): Promise<PixJob> {
+  /** Every read is per account: a job of another account counts as not found. */
+  async get(accountEmail: string, id: string): Promise<PixJob> {
     const job = await this.db.get("jobs", id);
-    if (!job) throw new PixError(ErrorCode.JobNotFound, `Job ${id} not found`, { id });
+    if (!job || job.accountEmail !== accountEmail) throw new PixError(ErrorCode.JobNotFound, `Job ${id} not found`, { id });
     return job.kind === "split" ? JobStore.upgrade(job) : job;
   }
 
@@ -132,11 +133,12 @@ export class JobStore {
     return all.filter((j): j is PanoramaJob => j.kind === "panorama" && j.status === "done" && j.accountEmail === accountEmail);
   }
 
-  async recent(limit: number): Promise<PixJob[]> {
+  /** The account's most recently updated jobs. */
+  async recent(accountEmail: string, limit: number): Promise<PixJob[]> {
     const out: PixJob[] = [];
     let cursor = await this.db.transaction("jobs").store.index("byUpdated").openCursor(null, "prev");
     while (cursor && out.length < limit) {
-      out.push(cursor.value);
+      if (cursor.value.accountEmail === accountEmail) out.push(cursor.value);
       cursor = await cursor.continue();
     }
     return out;

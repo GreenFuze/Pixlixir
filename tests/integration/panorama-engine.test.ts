@@ -9,6 +9,7 @@ import ExifReader from "exifreader";
 import { loadPyodide } from "pyodide";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_STITCH_SETTINGS, StitchRuntime, type StitchSettings } from "../../src/imaging/panorama/stitch-runtime.js";
+import type { RgbaImage } from "../../src/imaging/raster.js";
 import { ErrorCode, PixError } from "../../src/shared/errors.js";
 import { SyntheticScene } from "../fixtures/synthetic-scene.js";
 
@@ -110,6 +111,42 @@ describe("panorama engine (Pyodide + OpenCV)", () => {
       { keys: [100, 101, 103], duplicates: [102] },
       { keys: [105, 106], duplicates: [] },
     ]);
+  }, 120_000);
+
+  it("does not take a burst of one view for a panorama", () => {
+    // Paragraph: a pan to compare with; a burst whose framing wobbles, showing little more than one photo.
+    const scene = SyntheticScene.textured(1500, 700, 21);
+    const views = (xs: number[]) => SyntheticScene.windows(scene, xs, 0, 660, 700);
+    const load = (shots: RgbaImage[], base: number) => { shots.forEach((v, i) => runtime.setImage(base + i, v.data, v.width, v.height)); return shots.map((_, i) => base + i); };
+    expect(runtime.findGroups(load(views([0, 420, 840]), 200)).groups).toEqual([{ keys: [200, 201, 202], duplicates: [] }]);
+    expect(runtime.findGroups(load(views([300, 440, 240]), 210)).groups).toEqual([]);
+
+    // Paragraph: the camera moved plenty, but so did the subject: most of the overlap disagrees.
+    const moved = views([0, 300]);
+    for (const [shot, x] of [[moved[0]!, 300], [moved[1]!, 0]] as const) {
+      for (let y = 40; y < 660; y++) {
+        for (let px = x; px < x + 200; px++) {
+          const i = (y * shot.width + px) * 4;
+          shot.data[i] = x === 300 ? 250 : 5;
+          shot.data[i + 1] = x === 300 ? 245 : 10;
+          shot.data[i + 2] = x === 300 ? 240 : 20;
+        }
+      }
+    }
+    expect(runtime.findGroups(load(moved, 220)).groups).toEqual([]);
+  }, 120_000);
+
+  it("links pans whose matches are very strong (OpenCV zeroes their confidence)", () => {
+    const scene = SyntheticScene.textured(1300, 700, 33);
+    const shots = SyntheticScene.windows(scene, [0, 320, 640], 0, 660, 700);
+    shots.forEach((v, i) => runtime.setImage(230 + i, v.data, v.width, v.height));
+    expect(runtime.findGroups([230, 231, 232]).groups).toEqual([{ keys: [230, 231, 232], duplicates: [] }]);
+  }, 120_000);
+
+  it("reports how much more a stitched output shows than one photo", () => {
+    const out = runtime.stitch([1, 2, 3], flat, { kind: "preview" });
+    expect(out.viewGain).toBeGreaterThan(1.25);
+    expect(out.shortSide).toBeGreaterThan(0.5);
   }, 120_000);
 
   it("writes the earliest photo's EXIF with Google's time and location into a saved panorama", async () => {

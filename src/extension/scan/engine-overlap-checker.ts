@@ -5,7 +5,7 @@
 
 import type { LibraryItem } from "../../domain/types.js";
 import { DEFAULT_STITCH_SETTINGS, type Motion } from "../../imaging/panorama/stitch-runtime.js";
-import type { CandidatePreview, OverlapChecker, OverlapGroup } from "../../scan/panorama-detector.js";
+import { PanoramaPlausibility, type CandidatePreview, type OverlapChecker, type OverlapGroup } from "../../scan/panorama-detector.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import type { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
 import type { PhotosGateway } from "../editor/photos-gateway.js";
@@ -19,11 +19,11 @@ export class EngineOverlapChecker implements OverlapChecker {
     private readonly gateway: PhotosGateway,
     private readonly worker: PanoramaWorkerClient,
     private readonly nextKey: () => number,
-    /** Receives the thumbnail of each photo that ends up in a group (for the scan page). */
-    private readonly keepThumbnail: (mediaKey: string, thumb: Blob) => Promise<void>,
+    /** Makes the small image kept for each photo that ends up in a group. */
+    private readonly shrink: (thumb: Blob) => Promise<Blob>,
   ) {}
 
-  async check(sequence: readonly LibraryItem[], signal: AbortSignal): Promise<OverlapGroup[]> {
+  async check(sequence: readonly LibraryItem[], signal: AbortSignal, onProgress: (fraction: number) => void): Promise<OverlapGroup[]> {
     const keys = new Map<number, LibraryItem>();
     const thumbs = new Map<string, Blob>();
     try {
@@ -37,27 +37,27 @@ export class EngineOverlapChecker implements OverlapChecker {
           const key = this.nextKey();
           await this.worker.load(key, bitmap);
           keys.set(key, item);
+          onProgress(0.4 * (keys.size / sequence.length));
         }));
       }
 
       // Paragraph: which photos overlap (keys in capture order).
       const ordered = [...keys.entries()].sort((a, b) => a[1].takenAtMs - b[1].takenAtMs).map(([k]) => k);
       const found = await this.worker.findGroups(ordered);
+      onProgress(0.6);
 
       // Paragraph: a preview per group.
       const groups: OverlapGroup[] = [];
-      for (const g of found.groups) {
+      for (const [n, g] of found.groups.entries()) {
         if (signal.aborted) throw new PixError(ErrorCode.Cancelled, "The scan was stopped");
-        const mediaKeys = g.keys.map((k) => keys.get(k)!.mediaKey);
-        const duplicates = g.duplicates.map((k) => keys.get(k)!.mediaKey);
-        for (const mk of [...mediaKeys, ...duplicates]) await this.keepThumbnail(mk, thumbs.get(mk)!);
-        try {
-          groups.push({ mediaKeys, duplicates, preview: await this.preview(g.keys, keys), previewError: null });
-        } catch (err) {
-          if (err instanceof PixError && err.code === ErrorCode.Cancelled) throw err;
-          const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.StitchFailed, "Preview failed");
-          groups.push({ mediaKeys, duplicates, preview: null, previewError: e.toJSON() });
+        const stitched = await this.preview(g.keys);
+        if (stitched) {
+          const mediaKeys = stitched.used.map((k) => keys.get(k)!.mediaKey);
+          const small: Record<string, Blob> = {};
+          for (const mk of mediaKeys) small[mk] = await this.shrink(thumbs.get(mk)!);
+          groups.push({ mediaKeys, preview: stitched.preview, thumbs: small });
         }
+        onProgress(0.6 + 0.4 * ((n + 1) / found.groups.length));
       }
       return groups;
     } finally {
@@ -67,20 +67,25 @@ export class EngineOverlapChecker implements OverlapChecker {
   }
 
   /**
-   * Stitches "turning in place" first and, only if that cannot work out the camera
-   * positions, "moving over a flat surface" — the result says which one was used.
+   * Stitches "turning in place" first, then "moving over a flat surface", and returns the first
+   * believable panorama. Null means these photos do not make one, which is an answer rather than
+   * a failure; anything else that goes wrong (memory, the engine) propagates and is reported.
    */
-  private async preview(groupKeys: number[], items: Map<number, LibraryItem>): Promise<CandidatePreview> {
-    let lastError: unknown = null;
+  private async preview(groupKeys: number[]): Promise<{ preview: CandidatePreview; used: number[] } | null> {
     for (const motion of ["rotate", "flat"] as Motion[]) {
       try {
         const r = await this.worker.stitch(groupKeys, { ...DEFAULT_STITCH_SETTINGS, motion }, { kind: "preview" });
-        return { image: r.image, width: r.width, height: r.height, motion, dropped: r.dropped.map((k) => items.get(k)!.mediaKey) };
+        if (PanoramaPlausibility.holds(r)) return { preview: { image: r.image, width: r.width, height: r.height, motion }, used: r.used };
       } catch (err) {
-        lastError = err;
-        if (!(err instanceof PixError) || err.code !== ErrorCode.StitchFailed) throw err; // only alignment-type failures justify the other model
+        if (!EngineOverlapChecker.doesNotStitch(err)) throw err;
       }
     }
-    throw lastError;
+    return null;
+  }
+
+  /** The stitcher's own "cannot align these", as opposed to OpenCV or runtime errors. */
+  private static doesNotStitch(err: unknown): boolean {
+    if (!(err instanceof PixError)) return false;
+    return err.code === ErrorCode.StitchNotConnected || (err.code === ErrorCode.StitchFailed && err.details?.reason !== "OPENCV");
   }
 }

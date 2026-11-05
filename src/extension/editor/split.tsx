@@ -5,6 +5,7 @@ import type { Point, Quad } from "../../imaging/geometry.js";
 import type { SplitPrintRecord } from "../storage/job-store.js";
 import { bootEditor, ErrorBox, useSnapshot } from "./editor-ui.js";
 import { FixPanel } from "./fix/fix-panel.js";
+import { SplitBatch, type BatchEntry } from "./split-batch.js";
 import { SplitSession, type Snapshot } from "./split-session.js";
 
 const COLORS = ["#7b4dff", "#00a2ff", "#ff7a00", "#00b37e", "#ff3d7f", "#c2a600"];
@@ -133,14 +134,18 @@ function PrintCard(props: { session: SplitSession; snap: Snapshot; print: SplitP
 }
 
 
-// ---- app ------------------------------------------------------------------------------
+// ---- one scan -------------------------------------------------------------------------
 
-function App(props: { session: SplitSession }) {
-  const { session } = props;
+function ScanEditor(props: { session: SplitSession; batch: SplitBatch<SplitSession> }) {
+  const { session, batch } = props;
   const snap = useSnapshot(session);
+  const batchSnap = useSnapshot(batch);
   const [confirming, setConfirming] = useState(false);
   const [matchDate, setMatchDate] = useState(true);
-  const { phase, job, item, params } = snap;
+  const { phase, job, params } = snap;
+  const bulk = batchSnap.entries.length > 1;
+  const batchSaving = batchSnap.phase.name === "saving";
+  const totals = batch.totals();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,16 +163,7 @@ function App(props: { session: SplitSession }) {
   const savedCount = job?.prints.filter((p) => p.saved).length ?? 0;
 
   return (
-    <div class="app">
-      <header>
-        <div class="title">
-          <span class="logo">✦</span>
-          <h1>Split into Photos</h1>
-          {item?.fileName && <span class="muted">{item.fileName}</span>}
-        </div>
-        <span class="pill" title="All changes go to this Google account">Account: <strong>{params.email}</strong></span>
-      </header>
-
+    <>
       {phase.name === "loading" && <div class="center muted" aria-live="polite">{phase.step}</div>}
       {phase.name === "failed" && <div class="center"><ErrorBox error={phase.error} /></div>}
 
@@ -177,20 +173,19 @@ function App(props: { session: SplitSession }) {
             <QuadCanvas snap={snap} session={session} />
           </section>
           <aside>
-            {snap.resumed && <div class="note">Resumed your earlier split of this scan{snap.resumed.savedBefore > 0 ? ` (${snap.resumed.savedBefore} already saved)` : ""}.</div>}
             <div class="row between">
-              <strong>{job.prints.length} photo{job.prints.length === 1 ? "" : "s"} found</strong>
-              <button class="btn small" disabled={phase.name === "saving"} onClick={() => session.addPrint()}>+ Add photo</button>
-            </div>
-            <div class="row between">
-              <span class="muted small">Sideways? Rotate all</span>
+              <span class="row">
+                <strong>{job.prints.length} photo{job.prints.length === 1 ? "" : "s"}</strong>
+                {snap.resumed && !bulk && <span class="pill" title={`Continuing your earlier split of this scan${snap.resumed.savedBefore > 0 ? ` (${snap.resumed.savedBefore} already saved)` : ""}`}>Resumed</span>}
+                <span class="pill" title={`Automatic on every photo: colour${snap.lightingAvailable ? ", lighting" : ""}, glare hotspots and sharpening. Use Fix… on a photo to adjust.`}>Auto-fix</span>
+              </span>
               <span class="row">
                 <button class="btn icon small" title="Rotate all left" aria-label="Rotate all left" disabled={phase.name === "saving"} onClick={() => session.rotateAll(-1)}>⟲</button>
                 <button class="btn icon small" title="Rotate all right" aria-label="Rotate all right" disabled={phase.name === "saving"} onClick={() => session.rotateAll(1)}>⟳</button>
+                <button class="btn small" title="Add an outline, then drag its corners around a picture" disabled={phase.name === "saving"} onClick={() => session.addPrint()}>+ Add</button>
               </span>
             </div>
-            <div class="note">Auto-fix is on: colour{snap.lightingAvailable ? ", lighting" : ""}, glare hotspots and sharpening. Use <strong>Fix…</strong> on a photo to compare, adjust, or paint over glare and damage.</div>
-            {job.prints.length === 0 && <p class="muted">No photos were detected. Use “Add photo” and drag the corners around each picture.</p>}
+            {job.prints.length === 0 && <p class="muted">No photos detected.</p>}
             <ul class="prints">
               {job.prints.map((p, i) => <PrintCard key={p.id} session={session} snap={snap} print={p} index={i} />)}
             </ul>
@@ -200,21 +195,24 @@ function App(props: { session: SplitSession }) {
 
       {job && (phase.name === "ready" || phase.name === "saving" || phase.name === "finished") && (
         <footer>
-          <label class="opt">
-            <input type="checkbox" checked={matchDate} disabled={phase.name !== "ready"} onChange={() => setMatchDate(!matchDate)} />
-            Use the scan’s date (keeps the photos next to it in your timeline)
+          <label class="opt" title="Keeps the new photos next to the scan in your timeline">
+            <input type="checkbox" checked={matchDate} disabled={phase.name !== "ready" || batchSaving} onChange={() => setMatchDate(!matchDate)} />
+            Use the scan’s date
           </label>
           <div class="grow" />
-          <span class="muted">The original scan is never changed.</span>
-          <button class="btn" disabled={phase.name === "saving" || pending.length === 0} onClick={() => void session.downloadAll()}>Download</button>
-          {phase.name === "saving" ? (
+          <button class="btn" disabled={phase.name === "saving" || batchSaving || pending.length === 0} onClick={() => void session.downloadAll()}>Download</button>
+          {batchSnap.phase.name === "saving" ? (
+            <button class="btn primary" disabled>Saving scan {Math.min(batchSnap.phase.done + 1, batchSnap.phase.total)} of {batchSnap.phase.total}…</button>
+          ) : phase.name === "saving" ? (
             <button class="btn primary" disabled>Saving {phase.done}/{phase.total}…</button>
+          ) : bulk && totals.photos > 0 ? (
+            <button class="btn primary" disabled={!batch.analysed} title={batch.analysed ? undefined : "Still analysing scans"} onClick={() => setConfirming(true)}>Save {totals.photos} from {totals.scans} scan{totals.scans === 1 ? "" : "s"}</button>
+          ) : bulk ? (
+            <span class="pill ok">{totals.saved} saved</span>
           ) : phase.name === "finished" ? (
-            <span class="pill ok">All {savedCount} photos saved to Google Photos</span>
+            <span class="pill ok">{savedCount} saved</span>
           ) : (
-            <button class="btn primary" disabled={pending.length === 0} onClick={() => setConfirming(true)}>
-              Save {pending.length} to Google Photos
-            </button>
+            <button class="btn primary" disabled={pending.length === 0} onClick={() => setConfirming(true)}>Save {pending.length}</button>
           )}
         </footer>
       )}
@@ -228,19 +226,67 @@ function App(props: { session: SplitSession }) {
       {confirming && (
         <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
           <div class="modal card">
-            <h2 id="confirm-title">Save {pending.length} new photo{pending.length === 1 ? "" : "s"}?</h2>
-            <p>They will be uploaded as <strong>new items</strong> to <strong>{params.email}</strong>{matchDate ? ", dated like the original scan" : ""}. The original scan stays exactly as it is.</p>
+            <h2 id="confirm-title">Save {bulk ? totals.photos : pending.length} new photo{(bulk ? totals.photos : pending.length) === 1 ? "" : "s"}{bulk ? ` from ${totals.scans} scan${totals.scans === 1 ? "" : "s"}` : ""}?</h2>
+            <p>Uploaded as <strong>new items</strong> to <strong>{params.email}</strong>{matchDate ? ", dated like their scan" : ""}. The original{bulk ? "s stay" : " stays"} exactly as {bulk ? "they are" : "it is"}.</p>
             <div class="row end">
               <button class="btn" onClick={() => setConfirming(false)}>Cancel</button>
-              <button class="btn primary" autofocus onClick={() => { setConfirming(false); void session.save(matchDate); }}>Save</button>
+              <button class="btn primary" autofocus onClick={() => { setConfirming(false); void (bulk ? batch.saveAll(matchDate) : session.save(matchDate)); }}>Save</button>
             </div>
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+// ---- several scans ----------------------------------------------------------------------
+
+function Filmstrip(props: { batch: SplitBatch<SplitSession>; entries: BatchEntry[]; openIndex: number }) {
+  const { batch, entries, openIndex } = props;
+  const badge = (e: BatchEntry) =>
+    e.status === "failed" ? "!" : e.status === "saved" ? "✓" : e.status === "waiting" || e.status === "analysing" || e.status === "saving" ? "…" : String(e.found);
+  return (
+    <nav class="filmstrip" aria-label="Scans">
+      {entries.map((e, i) => (
+        <button key={e.mediaKey} class={`film ${i === openIndex ? "on" : ""} ${e.status}`} title={e.error?.message ?? e.fileName ?? `Scan ${i + 1}`} aria-current={i === openIndex} onClick={() => batch.open(i)}>
+          {e.thumbUrl ? <img src={e.thumbUrl} alt={`Scan ${i + 1}`} /> : <span class="muted small">{i + 1}</span>}
+          <span class="film-badge">{badge(e)}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function App(props: { batch: SplitBatch<SplitSession> }) {
+  const { batch } = props;
+  const snap = useSnapshot(batch);
+  const { entries, openIndex, current, params, phase } = snap;
+  const entry = entries[openIndex];
+  return (
+    <div class="app">
+      <header>
+        <div class="title">
+          <span class="logo">✦</span>
+          <h1>Split into Photos</h1>
+          {entries.length > 1 && <span class="muted">Scan {openIndex + 1} of {entries.length}</span>}
+          {entry?.fileName && <span class="muted">{entry.fileName}</span>}
+        </div>
+        <span class="pill" title="All changes go to this Google account">{params.email}</span>
+      </header>
+      {entries.length > 1 && <Filmstrip batch={batch} entries={entries} openIndex={openIndex} />}
+      {phase.name === "failed" ? <div class="center"><ErrorBox error={phase.error} /></div>
+        : current ? <ScanEditor key={`${entry?.mediaKey}`} session={current} batch={batch} />
+        : <div class="center muted" aria-live="polite">Waiting for this scan…</div>}
     </div>
   );
 }
 
 // ---- boot -----------------------------------------------------------------------------------
 
-bootEditor(() => new SplitSession(SplitSession.paramsFromUrl(location.search)), (session) => <App session={session} />);
+bootEditor(
+  () => {
+    const params = SplitBatch.paramsFromUrl(location.search);
+    return new SplitBatch<SplitSession>(params, (mediaKey) => new SplitSession({ tabId: params.tabId, email: params.email, mediaKey }));
+  },
+  (batch) => <App batch={batch} />,
+);

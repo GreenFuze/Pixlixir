@@ -2,6 +2,36 @@ import { describe, expect, it } from "vitest";
 import { ContentToBackground, Messenger, PageToContent } from "../../src/extension/messaging/protocol.js";
 import { ErrorCode, PixError } from "../../src/shared/errors.js";
 
+describe("sender checks", () => {
+  const ID = "abcdefghijklmnop";
+  const withRuntime = (fn: () => void) => {
+    (globalThis as unknown as { chrome: unknown }).chrome = { runtime: { id: ID } };
+    try {
+      fn();
+    } finally {
+      delete (globalThis as unknown as { chrome?: unknown }).chrome;
+    }
+  };
+
+  it("trusts our pages in a tab, in the modal iframe, and in the side panel", () => {
+    withRuntime(() => {
+      const page = `chrome-extension://${ID}/scan.html?tab=1`;
+      expect(Messenger.isExtensionPage({ id: ID, url: page, tab: { id: 5 } } as chrome.runtime.MessageSender)).toBe(true);
+      expect(Messenger.isExtensionPage({ id: ID, url: page, tab: { id: 5 }, frameId: 12 } as chrome.runtime.MessageSender)).toBe(true);
+      expect(Messenger.isExtensionPage({ id: ID, url: `chrome-extension://${ID}/sidepanel.html` })).toBe(true);
+    });
+  });
+
+  it("does not trust content scripts, web pages or other extensions as pages", () => {
+    withRuntime(() => {
+      expect(Messenger.isExtensionPage({ id: ID, url: "https://photos.google.com/", tab: { id: 5 } } as chrome.runtime.MessageSender)).toBe(false);
+      expect(Messenger.isExtensionPage({ id: "other", url: `chrome-extension://other/x.html` })).toBe(false);
+      expect(Messenger.isExtensionPage({ id: ID, url: "chrome-extension://other/x.html" })).toBe(false);
+      expect(Messenger.isExtensionPage({ url: `chrome-extension://${ID}/scan.html` })).toBe(false);
+    });
+  });
+});
+
 describe("message validation", () => {
   it("accepts well-formed messages", () => {
     const m = Messenger.parse(PageToContent, { type: "photos.getItem", expectedEmail: "a@b.com", mediaKey: "AF1QipXXXXXXXX" });

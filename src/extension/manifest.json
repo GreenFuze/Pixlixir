@@ -14,5 +14,6 @@
   "content_scripts": [
     { "matches": ["https://photos.google.com/*"], "js": ["content.js"], "run_at": "document_idle" }
   ],
+  "web_accessible_resources": [{ "resources": ["scan.html"], "matches": ["https://photos.google.com/*"] }],
   "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" }
 }

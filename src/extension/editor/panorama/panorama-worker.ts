@@ -28,6 +28,8 @@ export interface PanoramaRender {
   filledFraction: number;
   capped: boolean;
   scaleToFull: number;
+  viewGain: number;
+  shortSide: number;
   seconds: number;
   warnings: string[];
 }
@@ -86,6 +88,8 @@ class PanoramaWorker {
       filledFraction: r.filledFraction,
       capped: r.capped,
       scaleToFull: r.scaleToFull,
+      viewGain: r.viewGain,
+      shortSide: r.shortSide,
       seconds: r.seconds,
       warnings: r.warnings,
     };

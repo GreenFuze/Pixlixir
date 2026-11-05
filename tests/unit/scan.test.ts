@@ -5,9 +5,11 @@ import { MockPhotosAdapter } from "../../src/gphotos/mock-adapter.js";
 import { ListingParser } from "../../src/gphotos/protocol/rpcs.js";
 import { LibraryCatalog, type CatalogSource } from "../../src/scan/library-catalog.js";
 import { LibraryScanner } from "../../src/scan/library-scanner.js";
-import { PanoramaDetector, TimeSequenceGrouper, type OverlapChecker, type PanoramaCandidate } from "../../src/scan/panorama-detector.js";
+import { CONTENT_URL } from "../../src/gphotos/adapter.js";
+import { PanoramaDetector, TimeSequenceGrouper, type OverlapChecker, type OverlapGroup, type PanoramaCandidate, type SavedSequence, PanoramaPlausibility } from "../../src/scan/panorama-detector.js";
+import type { ScanCache } from "../../src/scan/scan-cache.js";
 import { ScanScopes } from "../../src/scan/scan-scope.js";
-import { ErrorCode } from "../../src/shared/errors.js";
+import { ErrorCode, PixError } from "../../src/shared/errors.js";
 
 const T0 = Date.UTC(2025, 5, 1, 12, 0, 0);
 const key = (n: number) => `AF1QipITEM${String(n).padStart(8, "0")}`;
@@ -86,27 +88,147 @@ describe("LibraryCatalog", () => {
 });
 
 describe("PanoramaDetector + LibraryScanner", () => {
-  it("emits one candidate per overlapping group, with retakes set aside and earlier saves recognised", async () => {
-    // Paragraph: a 4-shot sequence the engine splits into a 2-view pan (+1 retake); one shot overlaps nothing.
+  it("emits one candidate per stitched group, showing only its photos, and recognises earlier saves", async () => {
+    // Paragraph: a 4-shot sequence of which the engine stitches two; one shot is far away in time.
     const items = [item(1, 0), item(2, 3), item(3, 5), item(4, 8), item(9, 5000)];
     const checker: OverlapChecker = {
       check: async (seq) => {
         expect(seq.map((i) => i.mediaKey)).toEqual([key(1), key(2), key(3), key(4)]);
-        return [{ mediaKeys: [key(1), key(2)], duplicates: [key(3)], preview: null, previewError: null }];
+        return [{ mediaKeys: [key(1), key(2)], preview: { image: new Blob(["p"]), width: 10, height: 5, motion: "rotate" }, thumbs: {} }];
       },
     };
-    const detector = new PanoramaDetector(checker, (group) => (group.some((i) => i.mediaKey === key(1)) ? { webUrl: "mock://done" } : null));
+    const detector = new PanoramaDetector(checker, (group) => (group.some((i) => i.mediaKey === key(1)) ? { webUrl: "mock://done" } : null), memoryCache());
     const { source } = catalogOver(items);
     const found: PanoramaCandidate[] = [];
     const steps: string[] = [];
     const summary = await new LibraryScanner(new LibraryCatalog(source), [detector]).run({ kind: "library" }, { signal, progress: (s) => steps.push(s) }, (f) => found.push(f as PanoramaCandidate));
 
-    // Paragraph: one finding with its items, the retake and the earlier save.
+    // Paragraph: one finding with its items and the earlier save.
     expect(summary).toMatchObject({ itemsListed: 5, photos: 5, findings: 1 });
     expect(found[0]!.mediaKeys).toEqual([key(1), key(2)]);
-    expect(found[0]!.duplicates.map((i) => i.mediaKey)).toEqual([key(3)]);
+    expect(found[0]!.items.map((i) => i.mediaKey)).toEqual([key(1), key(2)]);
     expect(found[0]!.alreadyMade).toEqual({ webUrl: "mock://done" });
     expect(steps.some((s) => s.startsWith("Listing photos"))).toBe(true);
+  });
+});
+
+function memoryCache(): ScanCache<SavedSequence> & { map: Map<string, SavedSequence> } {
+  const map = new Map<string, SavedSequence>();
+  return { map, get: async (s) => map.get(s) ?? null, put: async (s, v) => void map.set(s, v) };
+}
+
+describe("PanoramaPlausibility", () => {
+  const used = (n: number) => Array.from({ length: n }, (_, i) => i);
+
+  it("accepts stitched panoramas, measured on OpenCV's public samples", () => {
+    expect(PanoramaPlausibility.holds({ viewGain: 2.33, shortSide: 0.85, used: used(6) })).toBe(true); // boat
+    expect(PanoramaPlausibility.holds({ viewGain: 2.66, shortSide: 1.36, used: used(6) })).toBe(true); // budapest
+    expect(PanoramaPlausibility.holds({ viewGain: 2.14, shortSide: 1.35, used: used(4) })).toBe(true); // newspaper
+  });
+
+  it("refuses what real bursts stitched into", () => {
+    expect(PanoramaPlausibility.holds({ viewGain: 1.15, shortSide: 0.84, used: used(2) })).toBe(false); // barely more than one photo
+    expect(PanoramaPlausibility.holds({ viewGain: 8.88, shortSide: 0.98, used: used(2) })).toBe(false); // a strip longer than its photos can be
+    expect(PanoramaPlausibility.holds({ viewGain: 0.43, shortSide: 0.63, used: used(2) })).toBe(false); // cropped to less than one photo
+    expect(PanoramaPlausibility.holds({ viewGain: 2, shortSide: 0.3, used: used(4) })).toBe(false); // a thin sliver
+    expect(PanoramaPlausibility.holds({ viewGain: 2, shortSide: 1, used: used(1) })).toBe(false); // one photo left
+  });
+});
+
+describe("PanoramaDetector saved results", () => {
+  const seq = [item(1, 0), item(2, 3), item(3, 6)];
+  const later = [item(4, 5000), item(5, 5003)];
+  const preview = { image: new Blob(["p"]), width: 10, height: 5, motion: "rotate" as const };
+  const groupOf = (s: readonly LibraryItem[]): OverlapGroup => ({ mediaKeys: s.map((i) => i.mediaKey), preview, thumbs: Object.fromEntries(s.map((i) => [i.mediaKey, new Blob(["t"])])) });
+  const ctx = (steps: string[] = []) => ({ signal, progress: (s: string) => void steps.push(s) });
+  const none = () => null;
+
+  it("checks each sequence once; later scans only check what is new", async () => {
+    // Paragraph: first scan checks everything and saves it.
+    const cache = memoryCache();
+    let checks = 0;
+    const checker: OverlapChecker = { check: async (s) => { checks++; return [groupOf(s)]; } };
+    const first: PanoramaCandidate[] = [];
+    const a = await new PanoramaDetector(checker, none, cache).analyze(seq, ctx(), (f) => first.push(f));
+    expect(a).toEqual({ photosReused: 0, photosChecked: 3, failures: [] });
+    expect(checks).toBe(1);
+
+    // Paragraph: second scan answers it from the cache, with preview and thumbnails, and checks only the new sequence.
+    const second: PanoramaCandidate[] = [];
+    const b = await new PanoramaDetector(checker, none, cache).analyze([...seq, ...later], ctx(), (f) => second.push(f));
+    expect(b).toEqual({ photosReused: 3, photosChecked: 2, failures: [] });
+    expect(checks).toBe(2);
+    expect(second.map((c) => c.items.length)).toEqual([3, 2]);
+    expect(second[0]!.preview.width).toBe(10);
+    expect(Object.keys(second[0]!.thumbs)).toEqual(seq.map((i) => i.mediaKey));
+  });
+
+  it("matches saved results across views (album item keys differ, dedup keys do not)", async () => {
+    const cache = memoryCache();
+    await new PanoramaDetector({ check: async (s) => [groupOf(s)] }, none, cache).analyze(seq, ctx(), () => {});
+    const albumView = seq.map((i, n) => ({ ...i, mediaKey: `AF1QipALBUMVIEW00${n}` }));
+    const found: PanoramaCandidate[] = [];
+    const never: OverlapChecker = { check: async () => { throw new Error("must not check"); } };
+    await new PanoramaDetector(never, none, cache).analyze(albumView, ctx(), (f) => found.push(f));
+    expect(found[0]!.mediaKeys).toEqual(albumView.map((i) => i.mediaKey));
+    expect(Object.keys(found[0]!.thumbs)).toEqual(albumView.map((i) => i.mediaKey));
+  });
+
+  it("checks a sequence again when a photo was added, or when asked to", async () => {
+    const cache = memoryCache();
+    let checks = 0;
+    const checker: OverlapChecker = { check: async (s) => { checks++; return [groupOf(s)]; } };
+    await new PanoramaDetector(checker, none, cache).analyze(seq, ctx(), () => {});
+    await new PanoramaDetector(checker, none, cache).analyze([...seq, item(9, 8)], ctx(), () => {});
+    expect(checks).toBe(2);
+    await new PanoramaDetector(checker, none, cache, true).analyze([...seq, item(9, 8)], ctx(), () => {});
+    expect(checks).toBe(3);
+  });
+
+  it("remembers sequences with no panorama, but not sequences that failed", async () => {
+    const cache = memoryCache();
+    await new PanoramaDetector({ check: async () => [] }, none, cache).analyze(seq, ctx(), () => {});
+    expect(cache.map.size).toBe(1);
+    const failed = memoryCache();
+    const r = await new PanoramaDetector({ check: async () => { throw new PixError(ErrorCode.StitchFailed, "OpenCV ran out of memory"); } }, none, failed).analyze(seq, ctx(), () => {});
+    expect(failed.map.size).toBe(0);
+    expect(r.failures.map((f) => f.message)).toEqual(["OpenCV ran out of memory"]);
+  });
+
+  it("keeps going when one sequence fails, and reports it", async () => {
+    const checker: OverlapChecker = { check: async (s) => { if (s[0]!.mediaKey === key(1)) throw new PixError(ErrorCode.MediaFetchFailed, "one bad photo"); return [groupOf(s)]; } };
+    const found: PanoramaCandidate[] = [];
+    const r = await new PanoramaDetector(checker, none, memoryCache()).analyze([...seq, ...later], ctx(), (f) => found.push(f));
+    expect(found).toHaveLength(1);
+    expect(r.failures.map((f) => f.message)).toEqual(["one bad photo"]);
+  });
+
+  it("stops at once on account problems and after repeated failures", async () => {
+    const run = (code: ErrorCode, seqs: number) => {
+      const items = Array.from({ length: seqs }, (_, n) => [item(n * 10, n * 1000), item(n * 10 + 1, n * 1000 + 3)]).flat();
+      let checks = 0;
+      const checker: OverlapChecker = { check: async () => { checks++; throw new PixError(code, "nope"); } };
+      return { promise: new PanoramaDetector(checker, none, memoryCache()).analyze(items, ctx(), () => {}), checks: () => checks };
+    };
+    const account = run(ErrorCode.AccountMismatch, 3);
+    await expect(account.promise).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
+    expect(account.checks()).toBe(1);
+    const repeated = run(ErrorCode.MediaFetchFailed, 20);
+    await expect(repeated.promise).rejects.toMatchObject({ code: ErrorCode.MediaFetchFailed });
+    expect(repeated.checks()).toBe(PanoramaDetector.MAX_FAILURES_IN_A_ROW);
+  });
+});
+
+describe("CONTENT_URL", () => {
+  it("accepts Google's image hosts as seen in live listings", () => {
+    expect(CONTENT_URL.test("https://photos.fife.usercontent.google.com/pw/AP1GczAbc-_123")).toBe(true);
+    expect(CONTENT_URL.test("https://lh3.googleusercontent.com/abc")).toBe(true);
+  });
+
+  it("rejects anything else", () => {
+    for (const bad of ["https://evil.example/pw/x", "https://usercontent.google.com.evil.example/x", "https://evil.example/.usercontent.google.com/x", "http://photos.fife.usercontent.google.com/pw/x", "https://photos.fife.usercontent.google.com/"]) {
+      expect(CONTENT_URL.test(bad)).toBe(false);
+    }
   });
 });
 

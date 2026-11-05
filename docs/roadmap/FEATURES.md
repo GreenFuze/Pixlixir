@@ -129,12 +129,13 @@ offers a review and a bulk action. New checks are added as detectors.
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| L-01 | **Scan library**: scope = date range, album, selection or whole library; findings stream in; review, select, bulk action, results page + recent work | 4 | implemented |
-| L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart, confirmed by feature matching; retakes set aside; preview per group; "already made" recognised | 4 | implemented |
+| L-01 | **Scan library**, a modal over Google Photos: scope = date range, album, selection or whole library; progress bar with time left, minimize to the chip; findings stream in; review, select, bulk action, results + recent work | 4 | implemented |
+| L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart that overlap partially, agree once aligned and show clearly more than one photo (bursts rejected); only groups and photos that stitch are shown; preview and in-modal editor per group; "already made" recognised | 4 | implemented |
 | L-03 | Detector: metadata problems (wrong dates/time zones, missing location — M-01, M-03) | 4 | todo |
 | L-04 | Detector: duplicates / near-duplicates (D section) | 4 | todo |
 | L-05 | Detector: album-page scans to split (R-01), HDR / focus brackets (C-04, C-05) | 4 | todo |
-| L-06 | Resumable scans and a scan history (today a scan lives in its tab; created items are recorded) | 4 | todo |
+| L-06 | **Incremental scans**: results saved per photo sequence on this computer; later scans show them at once and only check new or changed sequences; a stopped scan resumes the same way; "Re-check all" ignores them | 4 | implemented |
+| L-07 | Incremental listing (today the scope is listed again each time; only the analysis is skipped) | 4 | todo |
 
 ## R — Restore & Digitize
 
@@ -151,6 +152,7 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 | R-02 | Split: adjust boundaries, add missed, remove false detections | 3 | implemented |
 | R-03 | Split: crop/straighten/perspective-correct each print | 3 | implemented |
 | R-04 | Split: save each as a new item; original untouched; provenance recorded | 3 | implemented |
+| R-21 | **Bulk split**: select up to 100 scans; analysed one by one, reviewed from a filmstrip, saved together | 4 | implemented |
 | R-05 | Split runs **Fix** on every print (Split hosts the Fix feature; see below) | 4 | implemented |
 | R-19 | Automatic print orientation (detect sideways/upside-down prints; today: per-photo and "rotate all" buttons) | 3 | research |
 | R-12 | Multi-exposure scan fusion | 6 | research |

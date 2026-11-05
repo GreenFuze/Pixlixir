@@ -1,14 +1,14 @@
 /** Small Preact pieces shared by every editor tab. */
 
 import { render, type ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useSyncExternalStore } from "preact/compat";
+import { useCallback } from "preact/hooks";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 
-/** Re-renders on every snapshot the session publishes. */
+/** Re-renders on every snapshot the session publishes, including any published before the page subscribed. */
 export function useSnapshot<S>(session: { snapshot: S; subscribe(fn: (s: S) => void): () => void }): S {
-  const [snap, setSnap] = useState(session.snapshot);
-  useEffect(() => session.subscribe(setSnap), [session]);
-  return snap;
+  const subscribe = useCallback((onChange: () => void) => session.subscribe(onChange), [session]);
+  return useSyncExternalStore(subscribe, () => session.snapshot);
 }
 
 export function ErrorBox(props: { error: SerializedError }) {
@@ -21,11 +21,11 @@ export function ErrorBox(props: { error: SerializedError }) {
 }
 
 /** A row of mutually exclusive buttons. */
-export function Segmented<T extends string>(props: { value: T; options: { value: T; label: string }[]; disabled: boolean; onChange: (v: T) => void; label: string }) {
+export function Segmented<T extends string>(props: { value: T; options: { value: T; label: string; title?: string }[]; disabled: boolean; onChange: (v: T) => void; label: string }) {
   return (
     <div class="seg" role="radiogroup" aria-label={props.label}>
       {props.options.map((o) => (
-        <button key={o.value} class={`btn small ${o.value === props.value ? "on" : ""}`} role="radio" aria-checked={o.value === props.value} disabled={props.disabled} onClick={() => props.onChange(o.value)}>
+        <button key={o.value} title={o.title} class={`btn small ${o.value === props.value ? "on" : ""}`} role="radio" aria-checked={o.value === props.value} disabled={props.disabled} onClick={() => props.onChange(o.value)}>
           {o.label}
         </button>
       ))}

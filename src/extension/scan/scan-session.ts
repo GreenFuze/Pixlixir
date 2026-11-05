@@ -9,25 +9,27 @@
 import type { AlbumRef, LibraryItem } from "../../domain/types.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
 import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js";
-import { PanoramaDetector, type PanoramaCandidate } from "../../scan/panorama-detector.js";
+import { PanoramaDetector, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
+import { ScanEta } from "../../scan/scan-eta.js";
 import type { DetectorId, ScanDetector } from "../../scan/scan-detector.js";
 import { ScanScopes, type ScanScope, type ScanScopeKind } from "../../scan/scan-scope.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { CanvasCodec } from "../editor/canvas-codec.js";
 import { EditorSession } from "../editor/editor-session.js";
 import { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
+import { PanoramaSession } from "../editor/panorama/panorama-session.js";
 import { PhotosGateway } from "../editor/photos-gateway.js";
-import { Messenger } from "../messaging/protocol.js";
 import { JobStore, type PanoramaJob } from "../storage/job-store.js";
-import { SCAN_SELECTION_PREFIX } from "../tools.js";
+import { ScanStore } from "../storage/scan-store.js";
+import { SCAN_SELECTION_PREFIX, type ScanHandover } from "../tools.js";
 import { PanoramaBulkCreator } from "./panorama-bulk-creator.js";
 import { EngineOverlapChecker } from "./engine-overlap-checker.js";
 
 export interface ScanParams {
   tabId: number;
   email: string;
-  /** chrome.storage.session id of a selection handed over by the Photos tab. */
-  selectionId: string | null;
+  /** One-time chrome.storage.session id set by the service worker; holds the handed-over selection. */
+  selectionId: string;
   /** Album open in the Photos tab when the scan was started. */
   albumKey: string | null;
 }
@@ -36,7 +38,7 @@ export type CandidateStatus = "found" | "queued" | "working" | "created" | "fail
 
 export interface CandidateView {
   candidate: PanoramaCandidate;
-  previewUrl: string | null;
+  previewUrl: string;
   selected: boolean;
   status: CandidateStatus;
   step: string | null;
@@ -46,7 +48,7 @@ export interface CandidateView {
 
 export type ScanPhase =
   | { name: "setup" }
-  | { name: "scanning"; step: string; done: number | null; total: number | null }
+  | { name: "scanning"; step: string; done: number | null; total: number | null; secondsLeft: number | null }
   | { name: "review" }
   | { name: "creating"; done: number; total: number }
   | { name: "failed"; error: SerializedError };
@@ -62,6 +64,8 @@ export interface ScanSnapshot {
   albums: { status: "idle" | "loading" | "ready" | "failed"; items: AlbumRef[]; error: SerializedError | null };
   selection: string[];
   detectors: Record<DetectorId, boolean>;
+  /** Ignore saved results and check every photo again. */
+  recheck: boolean;
   summary: ScanSummary | null;
   /** What the last scan looked through, in words. */
   scopeLabel: string;
@@ -70,6 +74,10 @@ export interface ScanSnapshot {
   thumbs: Record<string, string>;
   /** Engine stage while previews/panoramas are being stitched. */
   progress: string | null;
+  /** Asking whether to stop running work before closing. */
+  confirmingClose: boolean;
+  /** One group open in the Create-panorama editor, inside this modal. */
+  editor: { candidateId: string; session: PanoramaSession } | null;
 }
 
 export class ScanSession extends EditorSession<ScanSnapshot> {
@@ -78,9 +86,11 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   readonly #gateway: PhotosGateway;
   readonly #worker: PanoramaWorkerClient;
   #store: JobStore | null = null;
+  #results: ScanStore | null = null;
   #scan: AbortController | null = null;
   #stopCreating = false;
   #nextKey = 1;
+  #lastActivity: string | null = null;
 
   constructor(params: ScanParams) {
     const today = new Date();
@@ -88,19 +98,22 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     super({
       params,
       phase: { name: "setup" },
-      scopeKind: params.albumKey ? "album" : params.selectionId ? "selection" : "dateRange",
+      scopeKind: params.albumKey ? "album" : "dateRange",
       from: ScanSession.isoDate(monthAgo),
       to: ScanSession.isoDate(today),
       albumKey: params.albumKey,
       albums: { status: "idle", items: [], error: null },
       selection: [],
       detectors: { panorama: true },
+      recheck: false,
       summary: null,
       scopeLabel: "",
       scanError: null,
       candidates: [],
       thumbs: {},
       progress: null,
+      confirmingClose: false,
+      editor: null,
     });
     this.#gateway = new PhotosGateway(params.email, params.tabId);
     this.#worker = new PanoramaWorkerClient((stage) => this.set({ progress: stage }));
@@ -110,16 +123,19 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const q = new URLSearchParams(search);
     const tabId = Number(q.get("tab"));
     const email = q.get("email") ?? "";
-    if (!Number.isInteger(tabId) || !email.includes("@")) {
-      throw new PixError(ErrorCode.InvalidMessage, "The scan was opened without a Google Photos tab.", { tabId, hasEmail: email.length > 0 });
+    const selectionId = q.get("sel");
+    if (!Number.isInteger(tabId) || !email.includes("@") || !selectionId) {
+      throw new PixError(ErrorCode.InvalidMessage, "Start the scan from the Pixlixir menu in Google Photos.", { tabId, hasEmail: email.length > 0, hasSession: selectionId !== null });
     }
-    return { tabId, email, selectionId: q.get("sel"), albumKey: q.get("album") };
+    return { tabId, email, selectionId, albumKey: q.get("album") };
   }
 
   dispose(): void {
     this.#scan?.abort();
+    this.snapshot.editor?.session.dispose();
     this.#worker.dispose();
     this.#store?.close();
+    this.#results?.close();
     this.revokeAll();
   }
 
@@ -127,16 +143,17 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   async init(): Promise<void> {
     try {
-      // Paragraph: storage, the handed-over selection, and albums when one is preselected.
+      // Paragraph: this page may only run when opened through the service worker (one-time id).
       this.#store = await JobStore.open();
-      const { selectionId } = this.snapshot.params;
-      if (selectionId) {
-        const k = SCAN_SELECTION_PREFIX + selectionId;
-        const got = await chrome.storage.session.get(k);
-        const keys = got[k];
-        if (!Array.isArray(keys)) throw new PixError(ErrorCode.InvalidMessage, "The selected photos are no longer available. Start the scan again from Google Photos.");
-        this.set({ selection: keys.map(String) });
-      }
+      this.#results = await ScanStore.open();
+      const k = SCAN_SELECTION_PREFIX + this.snapshot.params.selectionId;
+      const handover = (await chrome.storage.session.get(k))[k] as ScanHandover | undefined;
+      if (!handover || handover.accountEmail !== this.snapshot.params.email) throw new PixError(ErrorCode.InvalidMessage, "Start the scan from the Pixlixir menu in Google Photos.");
+      await chrome.storage.session.remove(k);
+      const keys = handover.mediaKeys;
+
+      // Paragraph: a selection is the most specific scope; else a preselected album.
+      if (keys.length > 0) this.set({ selection: keys, scopeKind: "selection" });
       if (this.snapshot.scopeKind === "album") await this.loadAlbums();
     } catch (err) {
       this.fail(err);
@@ -154,6 +171,10 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   setAlbum(albumKey: string): void {
     this.set({ albumKey, scanError: null });
+  }
+
+  toggleRecheck(): void {
+    this.set({ recheck: !this.snapshot.recheck });
   }
 
   toggleDetector(id: DetectorId): void {
@@ -203,21 +224,30 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       this.set({ scopeLabel: ScanScopes.describe(scope) });
       if (!this.snapshot.detectors.panorama) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
       const saved = await this.store().savedPanoramas(this.snapshot.params.email);
-      const checker = new EngineOverlapChecker(this.#gateway, this.#worker, () => this.#nextKey++, (mk, blob) => this.keepThumb(mk, blob));
-      const detectors: ScanDetector[] = [new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items)) as ScanDetector];
+      const checker = new EngineOverlapChecker(this.#gateway, this.#worker, () => this.#nextKey++, (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
+      const cache = this.results().cache<SavedSequence>(this.snapshot.params.email, "panorama");
+      const detectors: ScanDetector[] = [new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items), cache, this.snapshot.recheck) as ScanDetector];
 
       // Paragraph: run; findings appear as they are found.
-      this.set({ phase: { name: "scanning", step: "Starting", done: null, total: null } });
+      this.set({ phase: { name: "scanning", step: "Starting", done: null, total: null, secondsLeft: null } });
+      const eta = new ScanEta();
       const scanner = new LibraryScanner(new LibraryCatalog(this.#gateway), detectors);
       const summary = await scanner.run(scope, {
         signal: ctrl.signal,
-        progress: (step, done, total) => this.set({ phase: { name: "scanning", step, done: done ?? null, total: total ?? null } }),
+        progress: (step, done, total) => {
+          const counted = done !== undefined && total !== undefined;
+          this.set({ phase: { name: "scanning", step, done: done ?? null, total: total ?? null, secondsLeft: counted ? eta.update(done, total, Date.now()) : null } });
+          this.reportActivity(counted && total > 0 ? `Scanning ${Math.floor((done / total) * 100)}%` : "Scanning…");
+        },
       }, (finding) => this.addCandidate(finding as PanoramaCandidate));
       this.set({ phase: { name: "review" }, summary, progress: null });
+      this.reportActivity("Scan results");
     } catch (err) {
       const e = EditorSession.toError(err, "The scan failed");
       // A stopped scan keeps what it found so far.
-      this.set({ phase: this.snapshot.candidates.length > 0 ? { name: "review" } : { name: "setup" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
+      const found = this.snapshot.candidates.length > 0;
+      this.set({ phase: found ? { name: "review" } : { name: "setup" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
+      this.reportActivity(found ? "Scan results" : null);
     } finally {
       this.#scan = null;
     }
@@ -230,6 +260,38 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   newScan(): void {
     this.revokeAll();
     this.set({ phase: { name: "setup" }, candidates: [], thumbs: {}, summary: null, scanError: null });
+    this.reportActivity(null);
+  }
+
+  // ---- the modal -------------------------------------------------------------------
+
+  /** Keeps working in the background; the chip on the Photos tab shows progress and brings it back. */
+  minimize(): void {
+    this.set({ confirmingClose: false });
+    void this.#gateway.minimizeModal().catch((e: unknown) => this.set({ scanError: EditorSession.failure(e) }));
+  }
+
+  /** Closes right away unless work is running, which needs a confirmation first. */
+  requestClose(): void {
+    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating";
+    if (running) this.set({ confirmingClose: true });
+    else this.close();
+  }
+
+  cancelClose(): void {
+    this.set({ confirmingClose: false });
+  }
+
+  /** Removes the modal (and this page with it, which stops any running work). */
+  close(): void {
+    this.#scan?.abort();
+    void this.#gateway.closeModal().catch((e: unknown) => this.set({ confirmingClose: false, scanError: EditorSession.failure(e) }));
+  }
+
+  private reportActivity(label: string | null): void {
+    if (label === this.#lastActivity) return;
+    this.#lastActivity = label;
+    this.#gateway.reportActivity(label).catch((e: unknown) => console.error("[pixlixir] could not update the chip", e));
   }
 
   // ---- review --------------------------------------------------------------------
@@ -246,15 +308,34 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     return this.snapshot.candidates.filter((c) => c.selected && (c.status === "found" || c.status === "failed")).length;
   }
 
-  /** Opens one group in the Create-panorama editor (to fine-tune and save it by hand). */
+  /** Opens one group in the Create-panorama editor, in this modal (to fine-tune and save it by hand). */
   async openInEditor(id: string): Promise<void> {
-    const c = this.view(id);
+    const { params } = this.snapshot;
     try {
-      const tabId = await this.photosTab(this.snapshot.params.email, this.snapshot.params.tabId);
-      await Messenger.toBackground({ type: "panel.openTool", tool: "panorama", tabId, mediaKeys: c.candidate.mediaKeys });
+      const tabId = await this.photosTab(params.email, params.tabId);
+      const session = new PanoramaSession({ tabId, email: params.email, mediaKeys: this.view(id).candidate.mediaKeys });
+      this.set({ editor: { candidateId: id, session } });
+      await session.init();
     } catch (err) {
       this.patchCandidate(id, () => ({ error: EditorSession.failure(err) }));
     }
+  }
+
+  /** Back to the results; a panorama saved in the editor counts as created. */
+  closeEditor(): void {
+    const editor = this.snapshot.editor;
+    if (!editor) return;
+    const { phase, job, published } = editor.session.snapshot;
+    if (phase.name === "saving") return;
+    if (phase.name === "saved" && job?.saved && published) {
+      const { webUrl, width, height } = job.saved;
+      this.patchCandidate(editor.candidateId, () => ({
+        status: "created", selected: false, error: null,
+        result: { webUrl, width, height, albums: published.albumsAdded.map((a) => a.title), problems: published.problems.map((p) => p.message), skipped: 0, warnings: [] },
+      }));
+    }
+    editor.session.dispose();
+    this.set({ editor: null });
   }
 
   // ---- bulk creation -----------------------------------------------------------------
@@ -266,6 +347,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     if (todo.length === 0) return;
     this.#stopCreating = false;
     this.set({ candidates: this.snapshot.candidates.map((c) => (todo.includes(c.candidate.id) ? { ...c, status: "queued", error: null } : c)), phase: { name: "creating", done: 0, total: todo.length } });
+    this.reportActivity(`Creating 1/${todo.length}`);
     const creator = new PanoramaBulkCreator(this.#gateway, this.#worker, this.store(), () => this.#nextKey++, crypto.randomUUID(), (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
 
     // Paragraph: one panorama at a time (bounded memory); a failure doesn't stop the others.
@@ -287,8 +369,10 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
         if (e.code === ErrorCode.AccountMismatch || e.code === ErrorCode.TabNotBound || e.code === ErrorCode.SessionUnavailable) this.#stopCreating = true;
       }
       this.set({ phase: { name: "creating", done: i + 1, total: todo.length }, progress: null });
+      this.reportActivity(`Creating ${Math.min(i + 2, todo.length)}/${todo.length}`);
     }
     this.set({ phase: { name: "review" }, progress: null });
+    this.reportActivity("Scan results");
   }
 
   /** Stops after the panorama being built now. */
@@ -299,15 +383,10 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   // ---- internals -----------------------------------------------------------------
 
   private addCandidate(c: PanoramaCandidate): void {
-    const usable = c.preview !== null && c.alreadyMade === null;
-    const view: CandidateView = { candidate: c, previewUrl: c.preview ? URL.createObjectURL(c.preview.image) : null, selected: usable, status: "found", step: null, result: null, error: null };
-    this.set({ candidates: [...this.snapshot.candidates, view] });
-  }
-
-  private async keepThumb(mediaKey: string, blob: Blob): Promise<void> {
-    if (this.snapshot.thumbs[mediaKey]) return;
-    const url = URL.createObjectURL(await CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
-    this.set({ thumbs: { ...this.snapshot.thumbs, [mediaKey]: url } });
+    const view: CandidateView = { candidate: c, previewUrl: URL.createObjectURL(c.preview.image), selected: c.alreadyMade === null, status: "found", step: null, result: null, error: null };
+    const thumbs = { ...this.snapshot.thumbs };
+    for (const [key, blob] of Object.entries(c.thumbs)) thumbs[key] ??= URL.createObjectURL(blob);
+    this.set({ candidates: [...this.snapshot.candidates, view], thumbs });
   }
 
   private view(id: string): CandidateView {
@@ -320,13 +399,18 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     this.set({ candidates: this.snapshot.candidates.map((c) => (c.candidate.id === id ? { ...c, ...patch(c) } : c)) });
   }
 
+  private results(): ScanStore {
+    if (!this.#results) throw new PixError(ErrorCode.StorageFailed, "Saved scan results are not open");
+    return this.#results;
+  }
+
   private store(): JobStore {
     if (!this.#store) throw new PixError(ErrorCode.StorageFailed, "Pixlixir storage is not open");
     return this.#store;
   }
 
   private revokeAll(): void {
-    for (const c of this.snapshot.candidates) if (c.previewUrl) URL.revokeObjectURL(c.previewUrl);
+    for (const c of this.snapshot.candidates) URL.revokeObjectURL(c.previewUrl);
     for (const url of Object.values(this.snapshot.thumbs)) URL.revokeObjectURL(url);
   }
 

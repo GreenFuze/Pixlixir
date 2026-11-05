@@ -16,7 +16,7 @@ const TOOL_HELP: Record<Tool, string> = {
   protect: "Paint over areas that automatic fixes must not touch (e.g. a white shirt mistaken for glare).",
 };
 
-function Toggle(props: { label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void; hint?: string }) {
+function Toggle(props: { label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void; hint?: string | undefined }) {
   return (
     <label class="fx-toggle" title={props.hint}>
       <input type="checkbox" checked={props.checked} disabled={props.disabled} onChange={(e) => props.onChange((e.target as HTMLInputElement).checked)} />
@@ -83,7 +83,7 @@ export function FixPanel(props: { controller: FixController; fix: FixView; targe
       <div class="fx">
         <header class="fx-head">
           <strong>{title}</strong>
-          <span class="muted">{fix.busy ? "Updating preview…" : "Preview"}</span>
+          {fix.busy && <span class="muted small">Updating…</span>}
           <div class="grow" />
           <button class="btn icon small" title="Rotate left" aria-label="Rotate left" onClick={() => session.rotate(print.id, -1)}>⟲</button>
           <button class="btn icon small" title="Rotate right" aria-label="Rotate right" onClick={() => session.rotate(print.id, 1)}>⟳</button>
@@ -114,7 +114,7 @@ export function FixPanel(props: { controller: FixController; fix: FixView; targe
               <button class="btn small" onPointerDown={() => setComparing(true)} onPointerUp={() => setComparing(false)} onPointerLeave={() => setComparing(false)} onKeyDown={(e) => e.key === " " && setComparing(true)} onKeyUp={() => setComparing(false)}>
                 Hold to compare
               </button>
-              <Toggle label="Show automatically fixed areas" checked={showMask} onChange={setShowMask} />
+              <Toggle label="Show fixed areas" hint="Highlights the areas fixed automatically" checked={showMask} onChange={setShowMask} />
             </div>
           </section>
 
@@ -122,13 +122,12 @@ export function FixPanel(props: { controller: FixController; fix: FixView; targe
             <div class="fx-group">
               <Toggle label="Reduce glare automatically" checked={adj.glare.enabled} onChange={(v) => update({ glare: { ...adj.glare, enabled: v } })} hint="Only clear, bright hotspots are treated automatically. Use the Glare brush for sheen." />
               <Slider label="Sensitivity" value={adj.glare.sensitivity} disabled={!adj.glare.enabled} onChange={(v) => update({ glare: { ...adj.glare, sensitivity: v } })} />
-              {report && <div class="muted small">{report.glareCoverage > 0 ? `Treated ${(report.glareCoverage * 100).toFixed(1)}% of the photo` : "No glare treated yet — paint it with the Glare brush."}</div>}
+              {report && report.glareCoverage > 0 && <div class="muted small">Treated {(report.glareCoverage * 100).toFixed(1)}%</div>}
             </div>
 
             <div class="fx-group">
-              <Toggle label="Fix lighting & shadows" checked={adj.lighting.enabled && lightingAvailable} disabled={!lightingAvailable} onChange={(v) => update({ lighting: { ...adj.lighting, enabled: v } })} />
+              <Toggle label="Fix lighting & shadows" hint={lightingAvailable ? undefined : "Not available for this scan: the surface around the photos is too varied to measure the light."} checked={adj.lighting.enabled && lightingAvailable} disabled={!lightingAvailable} onChange={(v) => update({ lighting: { ...adj.lighting, enabled: v } })} />
               <Slider label="Strength" value={adj.lighting.strength} disabled={!adj.lighting.enabled || !lightingAvailable} onChange={(v) => update({ lighting: { ...adj.lighting, strength: v } })} />
-              {!lightingAvailable && <div class="muted small">Not available for this scan: the surface around the photos is too varied to measure the light.</div>}
             </div>
 
             <div class="fx-group">
@@ -156,12 +155,11 @@ export function FixPanel(props: { controller: FixController; fix: FixView; targe
             <div class="fx-group">
               <div class="fx-seg" role="radiogroup" aria-label="Brush">
                 {(["none", "glare", "repair", "protect"] as Tool[]).map((t) => (
-                  <button key={t} role="radio" aria-checked={tool === t} class={`btn small ${tool === t ? "on" : ""}`} style={t !== "none" ? { borderColor: TOOL_COLORS[t] } : undefined} onClick={() => setTool(t)}>
+                  <button key={t} role="radio" aria-checked={tool === t} title={TOOL_HELP[t]} class={`btn small ${tool === t ? "on" : ""}`} style={t !== "none" ? { borderColor: TOOL_COLORS[t] } : undefined} onClick={() => setTool(t)}>
                     {t === "none" ? "No brush" : t[0]!.toUpperCase() + t.slice(1)}
                   </button>
                 ))}
               </div>
-              <div class="muted small">{TOOL_HELP[tool]}</div>
               <label class="fx-slider">
                 <span class="muted">Brush size</span>
                 <input type="range" min={0.005} max={0.08} step={0.005} value={brushSize} onInput={(e) => setBrushSize(Number((e.target as HTMLInputElement).value))} />
@@ -178,7 +176,6 @@ export function FixPanel(props: { controller: FixController; fix: FixView; targe
                 <button class="btn small" onClick={() => session.setAdjustments(print.id, { ...AdjustmentPresets.auto(), strokes: adj.strokes })}>Reset to auto</button>
                 <button class="btn small" onClick={() => session.setAdjustments(print.id, { ...AdjustmentPresets.none(), strokes: [] })}>No fixes</button>
               </div>
-              <div class="muted small">Fixes run on this computer. Nothing is uploaded until you save.</div>
             </div>
           </aside>
         </div>

@@ -68,6 +68,10 @@ launcher, side panel, service worker and editors); editors share `EditorSession`
 `WorkerRpcClient/Server` and `CanvasCodec`. Fix is a separate feature behind
 `FixController` (`src/extension/editor/fix/`).
 
+Saved data is per account: job records and scan results are keyed by account email and every
+read takes the account, so several Google accounts can share one Chrome profile without
+seeing each other's data. The side panel shows the active Photos tab's account only.
+
 Library scan: `src/scan/` holds the UI-free parts (`ScanScope`, `LibraryCatalog` paging,
 `ScanDetector` contract, `LibraryScanner`, `PanoramaDetector` + `TimeSequenceGrouper`);
 `src/extension/scan/` binds them to the extension (`ScanSession`, `EngineOverlapChecker`,

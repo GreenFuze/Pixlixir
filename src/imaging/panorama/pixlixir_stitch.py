@@ -12,7 +12,7 @@ compensation -> seam finding -> multi-band blending). We only add:
 - an optional edge fill (OpenCV inpainting) instead of cropping, with the filled area
   reported so the UI can mark it as made-up content;
 - output sizing (preview / bounded full resolution) and JPEG encoding;
-- OverlapGrouper: finds which photos of a burst-free sequence overlap into panoramas
+- OverlapGrouper: finds which photos of a sequence make a panorama rather than a burst
   (OpenStitching's feature detector + matcher, OpenCV homographies), for library scans;
 - ExifWriter: the saved panorama inherits the earliest photo's EXIF (Pillow), with the
   capture time and location Google Photos shows for it.
@@ -128,21 +128,31 @@ class FlatStitcher(_Reporting, AffineStitcher):
 
 class OverlapGrouper:
     """
-    Which photos of a candidate sequence overlap into panoramas.
+    Which photos of a time sequence make a panorama, as opposed to a burst of one view.
 
-    Pairwise SIFT matching (OpenStitching / OpenCV BestOf2Nearest) gives a confidence
-    and a homography per pair. A pair is *linked* when the match is confident and the
-    photos overlap partially; it is a *duplicate* (burst, retake) when each photo
-    covers most of the other. Duplicates collapse onto the earliest photo, and the
-    connected components of linked photos are the panorama groups.
+    Pairwise SIFT matching (OpenStitching / OpenCV BestOf2Nearest) gives a homography per
+    pair. A burst also matches, on its background, so three things must hold:
+
+    - photos *overlap partially*: pairs covering each other (retakes) collapse onto the
+      earliest one, and pairs that barely overlap or have few matches do not count;
+    - the *overlap shows the same scene* once aligned: a moving person disagrees, a pan does not;
+    - the group *shows more than one photo did*: its footprint is well above one photo.
+
+    Thresholds come from measuring real photos (docs/architecture/adr/0006-library-scan.md).
     """
 
     WORK_MEGAPIX = 0.25
     CONFIDENCE = 1.0
     MATCH_CONF = 0.65
-    MIN_OVERLAP = 0.05
+    MIN_OVERLAP = 0.1
     DUPLICATE_OVERLAP = 0.8
     DUPLICATE_INLIERS = 40
+    MIN_INLIERS = 25
+    MAX_DISAGREEMENT = 0.32
+    DISAGREEMENT_LEVEL = 25
+    MIN_FOOTPRINT = 1.4
+    MAX_PLANE_SPAN = 40
+    FOOTPRINT_RASTER = 256
     FULL_MATCH_LIMIT = 16
     RANGE_WIDTH = 8
 
@@ -166,33 +176,98 @@ class OverlapGrouper:
         for i in range(n):
             for j in range(i + 1, n):
                 match = matrix[i][j]
-                # OpenCV zeroes the confidence of near-identical pairs (confidence > 3), so such
-                # pairs are recognised by their inlier count and must turn out as duplicates below.
-                near_identical = match.confidence == 0 and match.num_inliers >= self.DUPLICATE_INLIERS
-                if (match.confidence < self.CONFIDENCE and not near_identical) or match.H is None or np.size(match.H) != 9:
+                # OpenCV zeroes the confidence of very strong matches (confidence > 3), so those
+                # are recognised by their inlier count instead.
+                very_strong = match.confidence == 0 and match.num_inliers >= self.DUPLICATE_INLIERS
+                if (match.confidence < self.CONFIDENCE and not very_strong) or match.H is None or np.size(match.H) != 9:
                     continue
                 pairs += 1
                 overlap = self._overlap(match.H, small[i].shape, small[j].shape)
-                if overlap is None or max(overlap) < self.MIN_OVERLAP:
+                if overlap is None:
                     continue
                 if min(overlap) >= self.DUPLICATE_OVERLAP:
                     self._union(parent, j, i)
-                elif not near_identical:
-                    links.append((i, j))
+                elif min(overlap) >= self.MIN_OVERLAP and match.num_inliers >= self.MIN_INLIERS and self._scene_agrees(small[i], small[j], match.H):
+                    links.append((i, j, np.asarray(match.H, dtype=np.float64)))
 
-        # Paragraph: components over duplicate-collapsed photos; keep those with 2+ distinct views.
+        # Paragraph: components over duplicate-collapsed photos.
         rep = [self._find(parent, i) for i in range(n)]
         component = list(range(n))
-        for i, j in links:
+        for i, j, _ in links:
             self._union(component, rep[i], rep[j])
         groups = {}
         for i in range(n):
             root = self._find(component, rep[i])
-            entry = groups.setdefault(root, {"views": [], "duplicates": []})
-            (entry["views"] if rep[i] == i else entry["duplicates"]).append(keys[i])
-        result = [{"keys": g["views"], "duplicates": g["duplicates"]} for g in groups.values() if len(g["views"]) >= 2]
+            entry = groups.setdefault(root, {"views": [], "indexes": [], "duplicates": []})
+            if rep[i] == i:
+                entry["views"].append(keys[i])
+                entry["indexes"].append(i)
+            else:
+                entry["duplicates"].append(keys[i])
+
+        # Paragraph: keep groups of 2+ views that really show more than one photo did.
+        result = []
+        for g in groups.values():
+            if len(g["views"]) < 2:
+                continue
+            distinct = [link for link in links if rep[link[0]] == link[0] and rep[link[1]] == link[1] and link[0] in g["indexes"]]
+            if self._footprint(g["indexes"], distinct, small) >= self.MIN_FOOTPRINT:
+                result.append({"keys": g["views"], "duplicates": g["duplicates"]})
         result.sort(key=lambda g: keys.index(g["keys"][0]))
         return {"groups": result, "pairs": pairs}
+
+    def _scene_agrees(self, a, b, H):
+        """False when too much of the aligned overlap differs: something moved between the shots."""
+        # Paragraph: photo a in b's frame, and where it is valid (away from its edges).
+        h, w = b.shape[:2]
+        H = np.asarray(H, dtype=np.float64)
+        warped = cv.warpPerspective(a, H, (w, h))
+        valid = cv.warpPerspective(np.full(a.shape[:2], 255, np.uint8), H, (w, h))
+        valid = cv.erode(valid, np.ones((9, 9), np.uint8)) > 0
+        if not np.any(valid):
+            return False
+
+        # Paragraph: compare blurred brightness (small misalignment is fine), ignoring exposure.
+        ga = cv.GaussianBlur(cv.cvtColor(warped, cv.COLOR_BGR2GRAY), (0, 0), 3).astype(np.float32)
+        gb = cv.GaussianBlur(cv.cvtColor(b, cv.COLOR_BGR2GRAY), (0, 0), 3).astype(np.float32)
+        ga += float(gb[valid].mean() - ga[valid].mean())
+        return float((np.abs(ga - gb)[valid] > self.DISAGREEMENT_LEVEL).mean()) <= self.MAX_DISAGREEMENT
+
+    def _footprint(self, indexes, links, small):
+        """Area the photos cover together, in units of one photo (their outlines joined through the links)."""
+        # Paragraph: each photo's homography into the first photo's frame.
+        neighbours = {i: [] for i in indexes}
+        for i, j, H in links:
+            neighbours[i].append((j, H))
+            neighbours[j].append((i, np.linalg.inv(H)))
+        origin = indexes[0]
+        to_origin = {origin: np.eye(3)}
+        todo = [origin]
+        while todo:
+            a = todo.pop()
+            for b, H_ab in neighbours[a]:
+                if b not in to_origin:
+                    to_origin[b] = to_origin[a] @ np.linalg.inv(H_ab)
+                    todo.append(b)
+
+        # Paragraph: outlines on a plane. A pan too wide for one plane blows up: it is certainly wide.
+        outlines = []
+        for i, H in to_origin.items():
+            h, w = small[i].shape[:2]
+            corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+            outlines.append(cv.perspectiveTransform(corners, H).reshape(-1, 2))
+        points = np.concatenate(outlines)
+        h0, w0 = small[origin].shape[:2]
+        low, span = points.min(axis=0), points.max(axis=0) - points.min(axis=0)
+        if not np.all(np.isfinite(span)) or span.max() > self.MAX_PLANE_SPAN * max(w0, h0):
+            return math.inf
+
+        # Paragraph: rasterize coarsely and count.
+        scale = self.FOOTPRINT_RASTER / max(float(span.max()), 1.0)
+        canvas = np.zeros((int(span[1] * scale) + 3, int(span[0] * scale) + 3), np.uint8)
+        for outline in outlines:
+            cv.fillConvexPoly(canvas, np.int32((outline - low) * scale), 255)
+        return float(np.count_nonzero(canvas)) / (scale * scale * w0 * h0)
 
     def _shrink(self, img):
         h, w = img.shape[:2]
@@ -412,6 +487,12 @@ class PanoramaEngine:
         effective = min(per_image, first_mp) if per_image > 0 else first_mp
         self._estimates[estimate_key] = (effective, pano_mp)
 
+        # Paragraph: what the output shows, at the first photo's scale (how scans tell a panorama from a stretched burst).
+        to_full = math.sqrt(first_mp / effective)
+        first_h, first_w = imgs[0].shape[:2]
+        view_gain = panorama.shape[0] * panorama.shape[1] * to_full * to_full / (first_h * first_w)
+        short_side = min(panorama.shape[:2]) * to_full / min(first_h, first_w)
+
         # Paragraph: fill the empty edges if asked (made-up content, reported), else they were cropped.
         filled = None
         if settings["edges"] == "fill":
@@ -452,6 +533,8 @@ class PanoramaEngine:
             "fill_png": fill_png,
             "capped": capped,
             "scale_to_full": math.sqrt(first_mp / effective),
+            "view_gain": view_gain,
+            "short_side": short_side,
             "seconds": round(time.time() - started, 2),
             "warnings": [str(w.message) for w in caught if not issubclass(w.category, StitchingWarning)] + metadata_warnings,
         }

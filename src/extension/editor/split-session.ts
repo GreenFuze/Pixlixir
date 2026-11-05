@@ -13,7 +13,7 @@ import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { Messenger } from "../messaging/protocol.js";
 import { JobStore, type SplitJob, type SplitPrintRecord } from "../storage/job-store.js";
-import { TOOLS } from "../tools.js";
+import { CanvasCodec } from "./canvas-codec.js";
 import { EditorSession } from "./editor-session.js";
 import type { FixController, FixView } from "./fix/fix-controller.js";
 import { SplitWorkerClient } from "./worker-client.js";
@@ -70,9 +70,11 @@ export class SplitSession extends EditorSession<Snapshot> implements FixControll
     });
   }
 
-  static paramsFromUrl(search: string): SplitParams {
-    const p = EditorSession.parseParams(search, { min: TOOLS.split.minPhotos, max: TOOLS.split.maxPhotos });
-    return { tabId: p.tabId, email: p.email, mediaKey: p.mediaKeys[0]! };
+  /** Small image of the whole scan (for the batch filmstrip). */
+  async thumbnail(): Promise<Blob> {
+    const url = this.snapshot.imageUrl;
+    if (!url) throw new PixError(ErrorCode.Internal, "The scan is not loaded yet");
+    return CanvasCodec.thumbnail(await (await fetch(url)).blob(), 160);
   }
 
   dispose(): void {

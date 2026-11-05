@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
-import { TOOL_IDS, type ToolId } from "../tools.js";
+import { TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 // ---- shared schemas ---------------------------------------------------------
 
@@ -28,7 +28,7 @@ export const SelectionSchema = z.discriminatedUnion("kind", [
 ]);
 
 const ToolSchema = z.enum(TOOL_IDS as [ToolId, ...ToolId[]]);
-const MediaKeysSchema = z.array(z.string().min(10)).min(1).max(40);
+const MediaKeysSchema = z.array(z.string().min(10)).min(1).max(Math.max(...TOOL_IDS.map((t) => TOOLS[t].maxPhotos)));
 /** A selection handed to a library scan (larger than any editor accepts). */
 const ScanSelectionSchema = z.array(z.string().min(10)).max(5000);
 const AlbumRefSchema = z.object({ mediaKey: z.string().min(10), title: z.string(), shared: z.boolean() });
@@ -76,6 +76,10 @@ export const PageToContent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("photos.thumbnail"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000), maxSide: z.number().int().min(64).max(2048) }),
   z.object({ type: z.literal("photos.addToAlbum"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(50), album: AlbumRefSchema }),
   z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
+  z.object({ type: z.literal("modal.open"), expectedEmail: z.string(), url: z.string().url() }),
+  z.object({ type: z.literal("modal.minimize"), expectedEmail: z.string() }),
+  z.object({ type: z.literal("modal.close"), expectedEmail: z.string() }),
+  z.object({ type: z.literal("modal.activity"), expectedEmail: z.string(), label: z.string().max(40).nullable() }),
 ]);
 export type PageToContent = z.infer<typeof PageToContent>;
 
@@ -111,7 +115,11 @@ export interface ReplyMap {
   "photos.thumbnail": { bytesBase64: string; mimeType: string };
   "photos.addToAlbum": null;
   "photos.setDescription": null;
-  "panel.openScan": { scanTabId: number };
+  "panel.openScan": null;
+  "modal.open": null;
+  "modal.minimize": null;
+  "modal.close": null;
+  "modal.activity": null;
 }
 
 // ---- helpers -----------------------------------------------------------------
@@ -127,8 +135,13 @@ export class Messenger {
     return r.data;
   }
 
+  /**
+   * Our own pages: the side panel, the service worker, and pages shown in a tab or in the
+   * modal iframe (Chrome sets sender.tab for those, so it must not be part of this check;
+   * the URL is what separates them from content scripts and web pages).
+   */
   static isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
-    return sender.id === chrome.runtime.id && !sender.tab && typeof sender.url === "string" && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+    return sender.id === chrome.runtime.id && typeof sender.url === "string" && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
   }
 
   static isPhotosContentScript(sender: chrome.runtime.MessageSender): boolean {
