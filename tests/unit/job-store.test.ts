@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
 import { JobStore, type SplitJob } from "../../src/extension/storage/job-store.js";
 import { SplitSession } from "../../src/extension/editor/split-session.js";
+import { DEFAULT_STITCH_SETTINGS } from "../../src/imaging/panorama/stitch-runtime.js";
 import { AdjustmentPresets } from "../../src/imaging/enhance/adjustments.js";
 
 function job(id: string, status: SplitJob["status"], mediaKey = "AF1QipSOURCE00000000"): SplitJob {
@@ -23,7 +24,13 @@ describe("JobStore", () => {
     const legacy = job("legacy", "editing", "AF1QipLEGACY0000000");
     delete (legacy.prints[0] as Partial<typeof legacy.prints[0]>).adjustments;
     await store.put(legacy);
-    expect((await store.get("legacy")).prints[0]!.adjustments).toEqual(AdjustmentPresets.auto());
+    const upgraded = await store.get("legacy");
+    expect(upgraded.kind === "split" && upgraded.prints[0]!.adjustments).toEqual(AdjustmentPresets.auto());
+    // Panorama jobs share the store but never resume a split.
+    const now = Date.now();
+    await store.put({ id: "pano", kind: "panorama", accountEmail: "a@b.com", sourceMediaKey: "AF1QipPANO000000000", sourceMediaKeys: ["AF1QipPANO000000000", "AF1QipPANO000000001"], usedMediaKeys: [], settings: DEFAULT_STITCH_SETTINGS, status: "editing", saved: null, error: null, createdAt: now, updatedAt: now });
+    expect(await store.latestOpenForSource("a@b.com", "AF1QipPANO000000000")).toBeNull();
+    expect((await store.get("pano")).kind).toBe("panorama");
     store.close();
   });
 });

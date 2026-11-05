@@ -1,11 +1,10 @@
-/** Per-photo Fix view: before/after, automatic fixes with sliders, and Glare / Repair / Protect brushes. */
+/** Fix feature panel (hosted by Split today, by a standalone Fix tool later): before/after, automatic fixes with sliders, and Glare / Repair / Protect brushes. */
 
 import { useRef, useState } from "preact/hooks";
-import type { Adjustments, BrushStroke, ColorMode } from "../../imaging/enhance/adjustments.js";
-import { AdjustmentPresets } from "../../imaging/enhance/adjustments.js";
-import type { SplitPrintRecord } from "../storage/job-store.js";
-import { QuarterTurn } from "./rotation.js";
-import type { FixView, SplitSession } from "./split-session.js";
+import type { Adjustments, BrushStroke, ColorMode } from "../../../imaging/enhance/adjustments.js";
+import { AdjustmentPresets } from "../../../imaging/enhance/adjustments.js";
+import { QuarterTurn } from "../rotation.js";
+import type { FixController, FixTarget, FixView } from "./fix-controller.js";
 
 type Tool = "none" | BrushStroke["kind"];
 
@@ -35,8 +34,8 @@ function Slider(props: { label: string; value: number; disabled?: boolean; onCha
   );
 }
 
-export function FixPanel(props: { session: SplitSession; fix: FixView; print: SplitPrintRecord; index: number; lightingAvailable: boolean }) {
-  const { session, fix, print, index, lightingAvailable } = props;
+export function FixPanel(props: { controller: FixController; fix: FixView; target: FixTarget; title: string; lightingAvailable: boolean }) {
+  const { controller: session, fix, target: print, title, lightingAvailable } = props;
   const adj = print.adjustments;
   const [tool, setTool] = useState<Tool>("none");
   const [brushSize, setBrushSize] = useState(0.025);
@@ -80,10 +79,10 @@ export function FixPanel(props: { session: SplitSession; fix: FixView; print: Sp
   const report = fix.report;
 
   return (
-    <div class="fx-backdrop" role="dialog" aria-modal="true" aria-label={`Fix photo ${index + 1}`}>
+    <div class="fx-backdrop" role="dialog" aria-modal="true" aria-label={title}>
       <div class="fx">
         <header class="fx-head">
-          <strong>Fix photo {index + 1}</strong>
+          <strong>{title}</strong>
           <span class="muted">{fix.busy ? "Updating preview…" : "Preview"}</span>
           <div class="grow" />
           <button class="btn icon small" title="Rotate left" aria-label="Rotate left" onClick={() => session.rotate(print.id, -1)}>⟲</button>
@@ -174,7 +173,7 @@ export function FixPanel(props: { session: SplitSession; fix: FixView; print: Sp
             </div>
 
             <div class="fx-group">
-              <button class="btn small" onClick={() => session.applySettingsToAll(print.id)}>Use these settings for all photos</button>
+              {session.applySettingsToAll && <button class="btn small" onClick={() => session.applySettingsToAll!(print.id)}>Use these settings for all photos</button>}
               <div class="row">
                 <button class="btn small" onClick={() => session.setAdjustments(print.id, { ...AdjustmentPresets.auto(), strokes: adj.strokes })}>Reset to auto</button>
                 <button class="btn small" onClick={() => session.setAdjustments(print.id, { ...AdjustmentPresets.none(), strokes: [] })}>No fixes</button>

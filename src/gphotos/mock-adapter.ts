@@ -3,9 +3,9 @@
  * every created item's URL points at a mock:// scheme.
  */
 
-import type { AccountRef, Capability, CreatedMediaItem, MediaItemInfo } from "../domain/types.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
-import type { PhotosLibraryAdapter, UploadOptions } from "./adapter.js";
+import type { LibraryCursor, PhotosLibraryAdapter, UploadOptions } from "./adapter.js";
 
 export interface MockUploadRecord {
   fileName: string;
@@ -17,6 +17,14 @@ export interface MockUploadRecord {
 export class MockPhotosAdapter implements PhotosLibraryAdapter {
   readonly uploads: MockUploadRecord[] = [];
   readonly originals = new Map<string, Uint8Array>();
+  readonly thumbnails = new Map<string, Uint8Array>();
+  readonly albums: AlbumRef[] = [];
+  readonly albumItems = new Map<string, string[]>();
+  readonly details = new Map<string, Omit<ItemDetails, "mediaKey" | "dedupKey">>();
+  readonly albumAdds: { mediaKeys: string[]; album: AlbumRef }[] = [];
+  readonly descriptions = new Map<string, string>();
+  /** Page size for listings (small, so tests exercise paging). */
+  pageSize = 3;
   readonly #items = new Map<string, MediaItemInfo>();
   #failNextUpload: PixError | null = null;
 
@@ -55,6 +63,56 @@ export class MockPhotosAdapter implements PhotosLibraryAdapter {
     const mediaKey = `mock-${this.uploads.length + 1}`;
     this.uploads.push({ fileName, bytes, options, mediaKey });
     return { ref: { accountEmail: this.account.email, mediaKey }, dedupKey: `dedup-${mediaKey}`, width: 0, height: 0, webUrl: `mock://photo/${mediaKey}` };
+  }
+
+  async listLibrary(cursor: LibraryCursor): Promise<Page<LibraryItem>> {
+    // Like the live token, the page token remembers where the listing started.
+    const [startText, offset] = cursor.page === null ? [cursor.startMs === null ? "" : String(cursor.startMs), null] : cursor.page.split("@");
+    const startMs = startText ? Number(startText) : null;
+    const all = [...this.#items.values()].sort((a, b) => b.takenAtMs - a.takenAtMs).filter((i) => startMs === null || i.takenAtMs <= startMs);
+    const r = this.page(all.map((i) => this.listed(i)), offset ?? null);
+    return { items: r.items, next: r.next === null ? null : `${startText}@${r.next}` };
+  }
+
+  async listAlbums(page: string | null): Promise<Page<AlbumRef>> {
+    return this.page(this.albums, page);
+  }
+
+  async listAlbumItems(albumKey: string, page: string | null): Promise<Page<LibraryItem>> {
+    const keys = this.albumItems.get(albumKey);
+    if (!keys) throw new PixError(ErrorCode.RpcEnvelopeMissing, `Mock album not found: ${albumKey}`, { albumKey });
+    return this.page(await Promise.all(keys.map(async (k) => this.listed(await this.getItem(k)))), page);
+  }
+
+  async getItemDetails(mediaKey: string): Promise<ItemDetails> {
+    const item = await this.getItem(mediaKey);
+    const extra = this.details.get(mediaKey) ?? { description: "", albums: [], location: null, camera: null };
+    return { mediaKey, dedupKey: item.dedupKey, ...extra };
+  }
+
+  async fetchThumbnail(baseUrl: string, _maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const item = [...this.#items.values()].find((i) => i.baseUrl === baseUrl);
+    const bytes = item ? (this.thumbnails.get(item.ref.mediaKey) ?? this.originals.get(item.ref.mediaKey)) : undefined;
+    if (!bytes) throw new PixError(ErrorCode.MediaFetchFailed, "Mock thumbnail not registered", { baseUrl });
+    return { bytes, mimeType: "image/jpeg" };
+  }
+
+  async addToAlbum(mediaKeys: readonly string[], album: AlbumRef): Promise<void> {
+    this.albumAdds.push({ mediaKeys: [...mediaKeys], album });
+  }
+
+  async setDescription(dedupKey: string, description: string): Promise<void> {
+    this.descriptions.set(dedupKey, description);
+  }
+
+  private listed(i: MediaItemInfo): LibraryItem {
+    return { mediaKey: i.ref.mediaKey, dedupKey: i.dedupKey, type: i.type, width: i.width, height: i.height, takenAtMs: i.takenAtMs, timezoneOffsetMs: i.timezoneOffsetMs, baseUrl: i.baseUrl, location: this.details.get(i.ref.mediaKey)?.location ?? null };
+  }
+
+  private page<T>(all: readonly T[], token: string | null): Page<T> {
+    const start = token === null ? 0 : Number(token);
+    const end = start + this.pageSize;
+    return { items: all.slice(start, end), next: end < all.length ? String(end) : null };
   }
 
   capabilities(): Capability[] {

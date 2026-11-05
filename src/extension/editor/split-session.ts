@@ -8,12 +8,14 @@
 
 import type { MediaItemInfo } from "../../domain/types.js";
 import { AdjustmentPresets, type Adjustments, type BrushStroke } from "../../imaging/enhance/adjustments.js";
-import type { EnhanceReport } from "../../imaging/enhance/pipeline.js";
 import type { Point, Quad } from "../../imaging/geometry.js";
 import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { Messenger } from "../messaging/protocol.js";
 import { JobStore, type SplitJob, type SplitPrintRecord } from "../storage/job-store.js";
+import { TOOLS } from "../tools.js";
+import { EditorSession } from "./editor-session.js";
+import type { FixController, FixView } from "./fix/fix-controller.js";
 import { SplitWorkerClient } from "./worker-client.js";
 
 export interface SplitParams {
@@ -28,16 +30,6 @@ export type Phase =
   | { name: "saving"; done: number; total: number }
   | { name: "finished" }
   | { name: "failed"; error: SerializedError };
-
-/** Large previews for the Fix view of one photo. */
-export interface FixView {
-  printId: string;
-  fixedUrl: string | null;
-  originalUrl: string | null;
-  maskUrl: string | null;
-  report: EnhanceReport | null;
-  busy: boolean;
-}
 
 export interface Snapshot {
   params: SplitParams;
@@ -55,16 +47,15 @@ export interface Snapshot {
   fix: FixView | null;
 }
 
-export class SplitSession {
-  #snap: Snapshot;
-  #listeners = new Set<(s: Snapshot) => void>();
+/** Hosts the Fix feature for each print (see fix/fix-controller.ts). */
+export class SplitSession extends EditorSession<Snapshot> implements FixController {
   #worker = new SplitWorkerClient();
   #store: JobStore | null = null;
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
   #fixGeneration = 0;
 
   constructor(params: SplitParams) {
-    this.#snap = {
+    super({
       params,
       phase: { name: "loading", step: "Connecting to Google Photos…" },
       item: null,
@@ -76,53 +67,31 @@ export class SplitSession {
       selectedId: null,
       resumed: null,
       fix: null,
-    };
+    });
   }
 
   static paramsFromUrl(search: string): SplitParams {
-    const q = new URLSearchParams(search);
-    const tabId = Number(q.get("tab"));
-    const email = q.get("email") ?? "";
-    const mediaKey = q.get("media") ?? "";
-    if (!Number.isInteger(tabId) || !email.includes("@") || mediaKey.length < 10) {
-      throw new PixError(ErrorCode.InvalidMessage, "The editor was opened without a valid photo reference.", { tabId, hasEmail: email.length > 0 });
-    }
-    return { tabId, email, mediaKey };
-  }
-
-  // ---- subscription ------------------------------------------------------
-
-  get snapshot(): Snapshot {
-    return this.#snap;
-  }
-
-  subscribe(fn: (s: Snapshot) => void): () => void {
-    this.#listeners.add(fn);
-    return () => this.#listeners.delete(fn);
-  }
-
-  private set(patch: Partial<Snapshot>): void {
-    this.#snap = { ...this.#snap, ...patch };
-    for (const fn of this.#listeners) fn(this.#snap);
+    const p = EditorSession.parseParams(search, { min: TOOLS.split.minPhotos, max: TOOLS.split.maxPhotos });
+    return { tabId: p.tabId, email: p.email, mediaKey: p.mediaKeys[0]! };
   }
 
   dispose(): void {
     this.#worker.dispose();
     this.#store?.close();
-    for (const url of Object.values(this.#snap.previews)) URL.revokeObjectURL(url);
-    if (this.#snap.imageUrl) URL.revokeObjectURL(this.#snap.imageUrl);
-    this.revokeFix(this.#snap.fix);
+    for (const url of Object.values(this.snapshot.previews)) URL.revokeObjectURL(url);
+    if (this.snapshot.imageUrl) URL.revokeObjectURL(this.snapshot.imageUrl);
+    this.revokeFix(this.snapshot.fix);
   }
 
   // ---- loading -------------------------------------------------------------
 
   async init(): Promise<void> {
     try {
-      const { params } = this.#snap;
+      const { params } = this.snapshot;
 
       // Paragraph: item info through the bound Photos tab.
       this.#store = await JobStore.open();
-      const tabId = await this.photosTab();
+      const tabId = await this.boundTab();
       const item = await Messenger.toPhotosTab(tabId, { type: "photos.getItem", expectedEmail: params.email, mediaKey: params.mediaKey });
       if (item.type === "video") throw new PixError(ErrorCode.InvalidImage, "Split into Photos works on photos, not videos.");
       this.set({ item, phase: { name: "loading", step: "Downloading the original…" } });
@@ -151,7 +120,7 @@ export class SplitSession {
     return this.requireStore().put({
       id: crypto.randomUUID(),
       kind: "split",
-      accountEmail: this.#snap.params.email,
+      accountEmail: this.snapshot.params.email,
       sourceMediaKey: item.ref.mediaKey,
       sourceFileName: item.fileName,
       sourceWidth: size.width,
@@ -177,8 +146,8 @@ export class SplitSession {
   rotate(id: string, delta: 1 | -1): void {
     this.mutatePrint(id, (p) => ({ ...p, rotation: (p.rotation + delta + 4) % 4 }));
     this.scheduleThumb(id, 0);
-    const fix = this.#snap.fix;
-    if (fix?.printId === id) {
+    const fix = this.snapshot.fix;
+    if (fix?.targetId === id) {
       if (fix.originalUrl) URL.revokeObjectURL(fix.originalUrl); // the "before" image must rotate too
       this.set({ fix: { ...fix, originalUrl: null } });
       this.scheduleFix(0);
@@ -200,7 +169,7 @@ export class SplitSession {
     const job = this.requireJob();
     if (job.prints.find((p) => p.id === id)?.saved) return; // saved prints stay on record
     this.commitJob({ ...job, prints: job.prints.filter((p) => p.id !== id) });
-    const previews = { ...this.#snap.previews };
+    const previews = { ...this.snapshot.previews };
     if (previews[id]) URL.revokeObjectURL(previews[id]);
     delete previews[id];
     this.set({ previews, selectedId: null });
@@ -208,7 +177,7 @@ export class SplitSession {
 
   /** Adds a centred rectangle covering ~40% of the image for the user to adjust. */
   addPrint(): void {
-    const size = this.#snap.imageSize;
+    const size = this.snapshot.imageSize;
     if (!size) return;
     const w = size.width * 0.4, h = size.height * 0.4, x = (size.width - w) / 2, y = (size.height - h) / 2;
     const quad: Quad = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
@@ -223,7 +192,7 @@ export class SplitSession {
   setAdjustments(id: string, adjustments: Adjustments): void {
     this.mutatePrint(id, (p) => ({ ...p, adjustments }));
     this.scheduleThumb(id, 250);
-    if (this.#snap.fix?.printId === id) this.scheduleFix(120);
+    if (this.snapshot.fix?.targetId === id) this.scheduleFix(120);
   }
 
   addStroke(id: string, stroke: BrushStroke): void {
@@ -245,13 +214,13 @@ export class SplitSession {
   }
 
   openFix(id: string): void {
-    this.revokeFix(this.#snap.fix);
-    this.set({ selectedId: id, fix: { printId: id, fixedUrl: null, originalUrl: null, maskUrl: null, report: null, busy: true } });
+    this.revokeFix(this.snapshot.fix);
+    this.set({ selectedId: id, fix: { targetId: id, fixedUrl: null, originalUrl: null, maskUrl: null, report: null, busy: true } });
     this.scheduleFix(0);
   }
 
   closeFix(): void {
-    this.revokeFix(this.#snap.fix);
+    this.revokeFix(this.snapshot.fix);
     this.set({ fix: null });
   }
 
@@ -259,7 +228,7 @@ export class SplitSession {
 
   /** Uploads every included, not-yet-saved print as a new item. Idempotent across retries. */
   async save(matchSourceDate: boolean): Promise<void> {
-    const item = this.#snap.item;
+    const item = this.snapshot.item;
     if (!item) return;
     let job = this.commitJob({ ...this.requireJob(), status: "saving" });
     const todo = job.prints.filter((p) => p.included && !p.saved);
@@ -273,10 +242,10 @@ export class SplitSession {
       try {
         const { image } = await this.#worker.render({ quad: print.quad, rotation: print.rotation, adjustments: print.adjustments, size: "full", wantMask: false });
         const bytesBase64 = Base64.encode(new Uint8Array(await image.arrayBuffer()));
-        const tabId = await this.photosTab();
+        const tabId = await this.boundTab();
         const created = await Messenger.toPhotosTab(tabId, {
           type: "photos.uploadPhoto",
-          expectedEmail: this.#snap.params.email,
+          expectedEmail: this.snapshot.params.email,
           fileName,
           bytesBase64,
           ...(matchSourceDate ? { takenAtMs: item.takenAtMs, timezoneOffsetMs: item.timezoneOffsetMs } : {}),
@@ -307,7 +276,7 @@ export class SplitSession {
       const { image } = await this.#worker.render({ quad: p.quad, rotation: p.rotation, adjustments: p.adjustments, size: "full", wantMask: false });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(image);
-      a.download = SplitSession.outputName(this.#snap.item?.fileName ?? null, i + 1);
+      a.download = SplitSession.outputName(this.snapshot.item?.fileName ?? null, i + 1);
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
     }
@@ -330,11 +299,11 @@ export class SplitSession {
   }
 
   private async renderThumb(id: string): Promise<void> {
-    const print = this.#snap.job?.prints.find((p) => p.id === id);
+    const print = this.snapshot.job?.prints.find((p) => p.id === id);
     if (!print) return;
     try {
       const { image } = await this.#worker.render({ quad: print.quad, rotation: print.rotation, adjustments: print.adjustments, size: "thumb", wantMask: false });
-      const previews = { ...this.#snap.previews };
+      const previews = { ...this.snapshot.previews };
       if (previews[id]) URL.revokeObjectURL(previews[id]);
       previews[id] = URL.createObjectURL(image);
       this.set({ previews });
@@ -345,9 +314,9 @@ export class SplitSession {
 
   /** Renders the large fixed + original + treated-mask previews for the open Fix view. */
   private async renderFix(): Promise<void> {
-    const fix = this.#snap.fix;
+    const fix = this.snapshot.fix;
     if (!fix) return;
-    const print = this.requirePrint(fix.printId);
+    const print = this.requirePrint(fix.targetId);
     const generation = ++this.#fixGeneration;
     this.set({ fix: { ...fix, busy: true } });
     try {
@@ -356,8 +325,8 @@ export class SplitSession {
         this.#worker.render({ ...base, adjustments: print.adjustments, wantMask: true }),
         fix.originalUrl ? Promise.resolve(null) : this.#worker.render({ ...base, adjustments: AdjustmentPresets.none(), wantMask: false }),
       ]);
-      if (generation !== this.#fixGeneration || this.#snap.fix?.printId !== fix.printId) return; // superseded
-      const current = this.#snap.fix!;
+      if (generation !== this.#fixGeneration || this.snapshot.fix?.targetId !== fix.targetId) return; // superseded
+      const current = this.snapshot.fix!;
       if (current.fixedUrl) URL.revokeObjectURL(current.fixedUrl);
       if (current.maskUrl) URL.revokeObjectURL(current.maskUrl);
       this.set({
@@ -382,9 +351,8 @@ export class SplitSession {
 
   // ---- internals -----------------------------------------------------------------
 
-  private async photosTab(): Promise<number> {
-    const { email, tabId } = this.#snap.params;
-    return (await Messenger.toBackground({ type: "photos.resolveTab", email, preferredTabId: tabId })).tabId;
+  private boundTab(): Promise<number> {
+    return this.photosTab(this.snapshot.params.email, this.snapshot.params.tabId);
   }
 
   private mutatePrint(id: string, fn: (p: SplitPrintRecord) => SplitPrintRecord): SplitJob {
@@ -401,8 +369,8 @@ export class SplitSession {
   }
 
   private requireJob(): SplitJob {
-    if (!this.#snap.job) throw new PixError(ErrorCode.JobNotFound, "No split job is active");
-    return this.#snap.job;
+    if (!this.snapshot.job) throw new PixError(ErrorCode.JobNotFound, "No split job is active");
+    return this.snapshot.job;
   }
 
   private requirePrint(id: string): SplitPrintRecord {
@@ -414,12 +382,6 @@ export class SplitSession {
   private requireStore(): JobStore {
     if (!this.#store) throw new PixError(ErrorCode.StorageFailed, "Storage not open");
     return this.#store;
-  }
-
-  private fail(err: unknown): void {
-    const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Unexpected failure");
-    console.error("[pixlixir]", e.toJSON());
-    this.set({ phase: { name: "failed", error: e.toJSON() } });
   }
 
   static printRecord(quad: Quad, confidence: number | null): SplitPrintRecord {

@@ -31,6 +31,12 @@ export const ErrorCode = {
   InvalidGeometry: "INVALID_GEOMETRY",
   InvalidImage: "INVALID_IMAGE",
 
+  // Panorama
+  StitchNotConnected: "STITCH_NOT_CONNECTED",
+  StitchFailed: "STITCH_FAILED",
+  OutOfMemory: "OUT_OF_MEMORY",
+  RuntimeUnavailable: "RUNTIME_UNAVAILABLE",
+
   // Jobs / storage
   JobNotFound: "JOB_NOT_FOUND",
   StorageFailed: "STORAGE_FAILED",

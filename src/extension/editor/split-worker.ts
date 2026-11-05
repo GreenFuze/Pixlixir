@@ -12,6 +12,8 @@ import { Raster, type RgbaImage } from "../../imaging/raster.js";
 import { PrintDetector, type DetectedPrint } from "../../imaging/split/detector.js";
 import { PerspectiveWarper } from "../../imaging/warp.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
+import { CanvasCodec } from "./canvas-codec.js";
+import { WorkerRpcServer } from "./worker-rpc.js";
 
 export interface RenderRequest {
   quad: Quad;
@@ -34,10 +36,6 @@ export type WorkerRequest =
   | { id: number; op: "detect" }
   | ({ id: number; op: "render" } & RenderRequest);
 
-export type WorkerResponse =
-  | { id: number; ok: true; value: unknown }
-  | { id: number; ok: false; error: ReturnType<PixError["toJSON"]> };
-
 class SplitWorker {
   static readonly SIZES = { thumb: 420, preview: 1400 } as const;
   #full: RgbaImage | null = null;
@@ -57,13 +55,7 @@ class SplitWorker {
 
   private load(bitmap: ImageBitmap): { width: number; height: number; lightingAvailable: boolean } {
     // Paragraph: decode into RGBA once.
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) throw new PixError(ErrorCode.MediaDecodeFailed, "2D canvas unavailable in worker");
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const full: RgbaImage = { width: data.width, height: data.height, data: data.data };
+    const full: RgbaImage = CanvasCodec.decode(bitmap);
     this.#full = full;
 
     // Paragraph: smaller copies of the scan for fast previews (a print covers only part of the scan,
@@ -94,22 +86,14 @@ class SplitWorker {
 
     // Paragraph: rotate and encode.
     const out = Raster.rotate90(fixed.image, req.rotation);
-    const image = await SplitWorker.encode(out, "image/jpeg", req.size === "full" ? 0.95 : 0.85);
+    const image = await CanvasCodec.encode(out, "image/jpeg", req.size === "full" ? 0.95 : 0.85);
     let mask: Blob | null = null;
     if (fixed.treatedMask) {
       const overlay = Raster.createRgba(rect.width, rect.height);
       for (let i = 0; i < fixed.treatedMask.length; i++) overlay.data.set([255, 0, 200, Math.round(Math.min(1, fixed.treatedMask[i]!) * 170)], i * 4);
-      mask = await SplitWorker.encode(Raster.rotate90(overlay, req.rotation), "image/png", 1);
+      mask = await CanvasCodec.encode(Raster.rotate90(overlay, req.rotation), "image/png", 1);
     }
     return { image, mask, report: fixed.report };
-  }
-
-  private static async encode(img: RgbaImage, type: string, quality: number): Promise<Blob> {
-    const canvas = new OffscreenCanvas(img.width, img.height);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new PixError(ErrorCode.MediaDecodeFailed, "2D canvas unavailable in worker");
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0);
-    return canvas.convertToBlob({ type, quality });
   }
 
   private requireFull(): RgbaImage {
@@ -119,15 +103,4 @@ class SplitWorker {
 }
 
 const worker = new SplitWorker();
-self.addEventListener("message", (ev: MessageEvent<WorkerRequest>) => {
-  const req = ev.data;
-  Promise.resolve()
-    .then(() => worker.handle(req))
-    .then(
-      (value) => self.postMessage({ id: req.id, ok: true, value } satisfies WorkerResponse),
-      (err: unknown) => {
-        const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Split worker failed");
-        self.postMessage({ id: req.id, ok: false, error: e.toJSON() } satisfies WorkerResponse);
-      },
-    );
-});
+WorkerRpcServer.serve<WorkerRequest>((req) => worker.handle(req), "Split worker failed");

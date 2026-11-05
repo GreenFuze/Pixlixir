@@ -6,3 +6,4 @@ dist/
 captures/
 *.har
 dist-probe/
+vendor/

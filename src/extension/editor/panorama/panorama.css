@@ -1,0 +1,20 @@
+/* Create panorama: preview stage and settings column. */
+.pano-stage { position: relative; overflow: hidden; }
+.pano-frame { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+.pano-frame > img:first-child { display: block; max-width: calc(100vw - 340px - 40px); max-height: calc(100vh - 160px); box-shadow: var(--shadow); }
+.pano-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pano-busy { position: absolute; inset-block-end: 16px; inset-inline-start: 50%; transform: translateX(-50%); background: rgba(0,0,0,.7); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px; }
+.pano-msg { display: flex; flex-direction: column; gap: 10px; align-items: center; max-width: 520px; }
+.group { display: flex; flex-direction: column; gap: 6px; padding-block-end: 12px; border-block-end: 1px solid var(--border); }
+.group:last-child { border-block-end: none; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.field { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 8px; }
+select { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.srcs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.src { display: grid; grid-template-columns: 72px 1fr; gap: 10px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; }
+.src .thumb { width: 72px; height: 72px; display: grid; place-items: center; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.src .thumb img { max-width: 100%; max-height: 100%; }
+.src .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.src .meta > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inc { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+@media (max-width: 860px) { .pano-frame > img:first-child { max-width: calc(100vw - 40px); max-height: 50vh; } }

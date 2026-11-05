@@ -6,6 +6,7 @@
  *        photos.google.com tab, then run:
  *          await PixlixirProbe.readOnly("<mediaKey of any own photo>")
  *          await PixlixirProbe.uploadRoundTrip()   // creates ONE synthetic item; trash it afterwards
+ *          await PixlixirProbe.scanReadOnly()      // library, album and details reads used by the scan
  * Prints shapes and pass/fail only — never tokens or personal data.
  */
 
@@ -24,6 +25,23 @@ class PixlixirProbe {
     const res = await fetch(`${item.baseUrl}=d`, { credentials: "omit" });
     const blob = await res.blob();
     return { account: a.account.email.replace(/^(.).*(@.*)$/, "$1***$2"), type: item.type, dims: `${item.width}x${item.height}`, hasFileName: item.fileName !== null, originalHttp: res.status, originalBytes: blob.size, originalType: blob.type };
+  }
+
+  /** Read-only: the listing and details calls behind the library scan (shapes and counts only). */
+  static async scanReadOnly(): Promise<Record<string, unknown>> {
+    const a = PixlixirProbe.adapter();
+    const page1 = await a.listLibrary({ page: null, startMs: null });
+    const page2 = page1.next ? await a.listLibrary({ page: page1.next, startMs: null }) : null;
+    const newestFirst = page1.items.every((it, i) => i === 0 || page1.items[i - 1]!.takenAtMs >= it.takenAtMs);
+    const albums = await a.listAlbums(null);
+    const album = albums.items[0] ?? null;
+    const albumPage = album ? await a.listAlbumItems(album.mediaKey, null) : null;
+    const details = page1.items[0] ? await a.getItemDetails(page1.items[0].mediaKey) : null;
+    return {
+      page1: page1.items.length, page2: page2?.items.length ?? null, newestFirst, withLocation: page1.items.filter((i) => i.location).length,
+      albums: albums.items.length, firstAlbumItems: albumPage?.items.length ?? null,
+      details: details ? { albums: details.albums.length, hasLocation: details.location !== null, hasDescription: details.description.length > 0, hasCamera: details.camera !== null } : null,
+    };
   }
 
   static async uploadRoundTrip(): Promise<Record<string, unknown>> {

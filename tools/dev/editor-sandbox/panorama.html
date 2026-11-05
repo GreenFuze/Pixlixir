@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panorama editor sandbox · Pixlixir (dev only)</title>
+    <link rel="stylesheet" href="/dist/base.css" />
+    <link rel="stylesheet" href="/dist/editor.css" />
+    <link rel="stylesheet" href="/dist/panorama.css" />
+    <!-- Dev-only: fakes the extension APIs and a Google Photos tab. Serve with `node tools/dev/serve.mjs`, then open:
+         /tools/dev/editor-sandbox/panorama.html?tab=1&email=dev@example.com&media=AF1QipSANDBOX0000001,AF1QipSANDBOX0000002&img=/captures/a.jpg&img=/captures/b.jpg
+         (one img per media key, in the same order) -->
+    <script src="./chrome-stub.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/dist/panorama.js"></script>
+  </body>
+</html>

@@ -10,19 +10,25 @@
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "vendor": "node scripts/vendor-pyodide.mjs",
+    "pretest": "node scripts/vendor-pyodide.mjs",
     "test": "vitest run",
     "check": "npm run typecheck && npm run test && npm run build",
     "build:probe": "esbuild tools/live-probe/probe.ts --bundle --format=iife --target=chrome116 --outfile=dist-probe/probe.js",
-    "dev:split": "esbuild tools/dev/split-debug.ts --bundle --platform=node --format=esm --outfile=captures/.bin/split-debug.mjs --log-level=warning && node captures/.bin/split-debug.mjs"
+    "dev:split": "esbuild tools/dev/split-debug.ts --bundle --platform=node --format=esm --outfile=captures/.bin/split-debug.mjs --log-level=warning && node captures/.bin/split-debug.mjs",
+    "dev:serve": "node tools/dev/serve.mjs 5174"
   },
   "dependencies": {
     "idb": "^8.0.4",
     "preact": "^11.1.1",
+    "pyodide": "314.0.7",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",
+    "@types/node": "^26.6.6",
     "esbuild": "^0.28.2",
+    "exifreader": "^4.54.0",
     "fake-indexeddb": "^6.2.7",
     "happy-dom": "^21.0.4",
     "jpeg-js": "^0.4.4",

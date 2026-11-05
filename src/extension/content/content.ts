@@ -25,7 +25,8 @@ class ContentApp {
   constructor() {
     this.#launcher = new Launcher(document, {
       openPanel: () => void this.send({ type: "ui.openSidePanel" }),
-      splitIntoPhotos: (mediaKey) => void this.send({ type: "ui.openSplitEditor", mediaKey }),
+      openTool: (tool, mediaKeys) => void this.send({ type: "ui.openTool", tool, mediaKeys }),
+      openScan: (mediaKeys) => void this.send({ type: "ui.openScan", mediaKeys }),
     });
     this.#observer = new SelectionObserver(document, () => location.pathname, (sel) => {
       this.#selection = sel;
@@ -71,6 +72,24 @@ class ContentApp {
         if (msg.timezoneOffsetMs !== undefined) options.timezoneOffsetMs = msg.timezoneOffsetMs;
         return adapter.uploadPhoto(Base64.decode(msg.bytesBase64), msg.fileName, options);
       }
+      case "photos.listLibrary":
+        return adapter.listLibrary({ page: msg.page, startMs: msg.startMs });
+      case "photos.listAlbums":
+        return adapter.listAlbums(msg.page);
+      case "photos.listAlbumItems":
+        return adapter.listAlbumItems(msg.albumKey, msg.page);
+      case "photos.getItemDetails":
+        return adapter.getItemDetails(msg.mediaKey);
+      case "photos.thumbnail": {
+        const { bytes, mimeType } = await adapter.fetchThumbnail(msg.baseUrl, msg.maxSide);
+        return { bytesBase64: Base64.encode(bytes), mimeType };
+      }
+      case "photos.addToAlbum":
+        await adapter.addToAlbum(msg.mediaKeys, msg.album);
+        return null;
+      case "photos.setDescription":
+        await adapter.setDescription(msg.dedupKey, msg.description);
+        return null;
     }
   }
 

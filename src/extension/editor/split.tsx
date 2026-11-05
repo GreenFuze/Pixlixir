@@ -1,20 +1,14 @@
 /** Split-into-Photos editor view. */
 
-import { render } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Point, Quad } from "../../imaging/geometry.js";
-import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import type { SplitPrintRecord } from "../storage/job-store.js";
-import { FixPanel } from "./fix-view.js";
+import { bootEditor, ErrorBox, useSnapshot } from "./editor-ui.js";
+import { FixPanel } from "./fix/fix-panel.js";
 import { SplitSession, type Snapshot } from "./split-session.js";
 
 const COLORS = ["#7b4dff", "#00a2ff", "#ff7a00", "#00b37e", "#ff3d7f", "#c2a600"];
 
-function useSnapshot(session: SplitSession): Snapshot {
-  const [snap, setSnap] = useState(session.snapshot);
-  useEffect(() => session.subscribe(setSnap), [session]);
-  return snap;
-}
 
 // ---- canvas with editable quads ------------------------------------------------
 
@@ -138,14 +132,6 @@ function PrintCard(props: { session: SplitSession; snap: Snapshot; print: SplitP
   );
 }
 
-function ErrorBox(props: { error: SerializedError }) {
-  return (
-    <div class="error-box" role="alert">
-      <strong>{props.error.message}</strong>
-      <div><code>{props.error.code}</code></div>
-    </div>
-  );
-}
 
 // ---- app ------------------------------------------------------------------------------
 
@@ -234,9 +220,9 @@ function App(props: { session: SplitSession }) {
       )}
 
       {snap.fix && job && (() => {
-        const idx = job.prints.findIndex((p) => p.id === snap.fix!.printId);
+        const idx = job.prints.findIndex((p) => p.id === snap.fix!.targetId);
         const print = job.prints[idx];
-        return print ? <FixPanel session={session} fix={snap.fix} print={print} index={idx} lightingAvailable={snap.lightingAvailable} /> : null;
+        return print ? <FixPanel controller={session} fix={snap.fix} target={print} title={`Fix photo ${idx + 1}`} lightingAvailable={snap.lightingAvailable} /> : null;
       })()}
 
       {confirming && (
@@ -257,13 +243,4 @@ function App(props: { session: SplitSession }) {
 
 // ---- boot -----------------------------------------------------------------------------------
 
-const root = document.getElementById("app")!;
-try {
-  const session = new SplitSession(SplitSession.paramsFromUrl(location.search));
-  addEventListener("pagehide", () => session.dispose());
-  render(<App session={session} />, root);
-  void session.init();
-} catch (err) {
-  const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Editor failed to start");
-  render(<div class="center"><ErrorBox error={e.toJSON()} /></div>, root);
-}
+bootEditor(() => new SplitSession(SplitSession.paramsFromUrl(location.search)), (session) => <App session={session} />);

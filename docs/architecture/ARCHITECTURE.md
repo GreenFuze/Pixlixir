@@ -12,11 +12,13 @@
 │  • ResumableUploader            │         └──────────────────────────────────────┘
 │  • SelectionObserver (DOM)      │         ┌──────────────────────────────────────┐
 │  • Launcher (closed shadow DOM) │◄───────►│ Side panel (Preact)                   │
-└─────────────────────────────────┘ tabs.   │ Split editor tab (Preact)             │
-          ▲                         send    │  • SplitSession controller            │
-          │ same-origin fetch       Message │  • JobStore (IndexedDB)               │
-          ▼                                 │  • Split worker (detect/rectify/JPEG) │
-   Google Photos private web API            └──────────────────────────────────────┘
+└─────────────────────────────────┘ tabs.   │ Editor tabs (Preact)                  │
+          ▲                         send    │  • Split: SplitSession + split worker │
+          │ same-origin fetch       Message │    (hosts the Fix panel)              │
+          ▼                                 │  • Panorama: PanoramaSession + worker │
+   Google Photos private web API            │    (Pyodide + OpenCV + OpenStitching) │
+                                            │  • JobStore (IndexedDB)               │
+                                            └──────────────────────────────────────┘
 ```
 
 | Layer | Path | Depends on |
@@ -36,6 +38,8 @@ positional indices and DOM selectors for Google's UI exist **only** under `src/g
 - [ADR-0002](adr/0002-content-script-owns-protocol.md) — The content script is the only place that performs Google requests.
 - [ADR-0003](adr/0003-classical-split-detector.md) — Classical CV in TypeScript (no OpenCV.js) for split detection.
 - [ADR-0004](adr/0004-esbuild-preact.md) — esbuild + Preact, single package, no framework CLI.
+- [ADR-0005](adr/0005-panorama-engine-pyodide-opencv.md) — Panorama stitching with OpenCV + OpenStitching running in Pyodide (vendored, hash-pinned).
+- [ADR-0006](adr/0006-library-scan.md) — Library scan: list a scope once, run pluggable detectors, bulk actions; panorama detection; metadata inheritance.
 
 ## Boundaries & trust
 
@@ -57,7 +61,19 @@ lives in `chrome.storage.session`.
 ## Processing engines
 
 Today: `PrintDetector` + `PerspectiveWarper` (pure TS) in a module worker, `OffscreenCanvas`
-for decode/encode. Planned: a capability-aware `ProcessingProvider` interface
+for decode/encode. Panorama: `StitchRuntime` (Pyodide + OpenCV + OpenStitching, driven by
+`pixlixir_stitch.py`) in its own module worker; the same runtime runs in Node for tests.
+Editor tools are declared once in `src/extension/tools.ts` (selection rules shared by the
+launcher, side panel, service worker and editors); editors share `EditorSession`,
+`WorkerRpcClient/Server` and `CanvasCodec`. Fix is a separate feature behind
+`FixController` (`src/extension/editor/fix/`).
+
+Library scan: `src/scan/` holds the UI-free parts (`ScanScope`, `LibraryCatalog` paging,
+`ScanDetector` contract, `LibraryScanner`, `PanoramaDetector` + `TimeSequenceGrouper`);
+`src/extension/scan/` binds them to the extension (`ScanSession`, `EngineOverlapChecker`,
+`PanoramaBulkCreator`, `scan.html`). Editors and the scan reach the Photos tab through
+`PhotosGateway`; the panorama editor and bulk creation share `panorama-pipeline.ts`
+(source loading, `MetadataInheritance`, `PanoramaPublisher`). Planned: a capability-aware `ProcessingProvider` interface
 (local classical, local model via WebGPU/WASM, optional companion, cloud providers) with
 explicit cost/privacy metadata shown before running.
 
@@ -71,5 +87,5 @@ to the extension. The extension remains fully functional without it.
 
 `AccountRef`, `MediaRef` (account-namespaced), `MediaItemInfo`, `CreatedMediaItem`,
 `Capability`, `SplitJob` / `SplitPrintRecord` (quad, rotation, included, saved result,
-error). Planned additions: `MediaVersion`, `ChangeProposal`, `MetadataSuggestion`,
+error), `PanoramaJob` (sources, used sources, settings, saved result). Planned additions: `MediaVersion`, `ChangeProposal`, `MetadataSuggestion`,
 `ProcessingJob` (generalising `SplitJob`).

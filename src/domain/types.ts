@@ -38,6 +38,50 @@ export interface MediaItemInfo {
   sizeBytes: number | null;
 }
 
+/** A point on Earth in decimal degrees. */
+export interface GeoPoint {
+  latitude: number;
+  longitude: number;
+}
+
+/** One item as listed by a library/album page (cheap: no per-item request). */
+export interface LibraryItem {
+  mediaKey: string;
+  dedupKey: string;
+  type: MediaType;
+  width: number;
+  height: number;
+  takenAtMs: number;
+  timezoneOffsetMs: number;
+  /** Base content URL (renditions via RenditionUrl). */
+  baseUrl: string;
+  /** Location Google Photos shows for the item, if any. */
+  location: GeoPoint | null;
+}
+
+/** A page of a paged listing; `next` is null on the last page. */
+export interface Page<T> {
+  items: T[];
+  next: string | null;
+}
+
+export interface AlbumRef {
+  mediaKey: string;
+  title: string;
+  /** Shared albums are visible to other people. */
+  shared: boolean;
+}
+
+/** Per-item details beyond the listing (one request per item). */
+export interface ItemDetails {
+  mediaKey: string;
+  dedupKey: string;
+  description: string;
+  albums: AlbumRef[];
+  location: GeoPoint | null;
+  camera: { make: string | null; model: string | null } | null;
+}
+
 /** Result of committing a new upload to the library. */
 export interface CreatedMediaItem {
   ref: MediaRef;

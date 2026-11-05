@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Library scan sandbox · Pixlixir (dev only)</title>
+    <link rel="stylesheet" href="/dist/base.css" />
+    <link rel="stylesheet" href="/dist/editor.css" />
+    <link rel="stylesheet" href="/dist/scan.css" />
+    <!-- Dev-only: fakes the extension APIs and a Google Photos library (see chrome-stub.js). Serve with `node tools/dev/serve.mjs`, then open:
+         /tools/dev/editor-sandbox/scan.html?tab=1&email=dev@example.com            (date range / album / whole library)
+         /tools/dev/editor-sandbox/scan.html?tab=1&email=dev@example.com&sel=sandbox (with a handed-over selection) -->
+    <script src="./chrome-stub.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/dist/scan.js"></script>
+  </body>
+</html>

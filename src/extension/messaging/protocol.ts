@@ -7,8 +7,9 @@
  */
 
 import { z } from "zod";
-import type { CreatedMediaItem, MediaItemInfo } from "../../domain/types.js";
+import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
+import { TOOL_IDS, type ToolId } from "../tools.js";
 
 // ---- shared schemas ---------------------------------------------------------
 
@@ -26,14 +27,22 @@ export const SelectionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("grid"), items: z.array(SelectedItemSchema) }),
 ]);
 
+const ToolSchema = z.enum(TOOL_IDS as [ToolId, ...ToolId[]]);
+const MediaKeysSchema = z.array(z.string().min(10)).min(1).max(40);
+/** A selection handed to a library scan (larger than any editor accepts). */
+const ScanSelectionSchema = z.array(z.string().min(10)).max(5000);
+const AlbumRefSchema = z.object({ mediaKey: z.string().min(10), title: z.string(), shared: z.boolean() });
+const PageTokenSchema = z.string().min(1).max(4000).nullable();
+
 const SerializedErrorSchema = z.object({ code: z.enum(Object.values(ErrorCode) as [ErrorCode, ...ErrorCode[]]), message: z.string(), details: z.record(z.string(), z.unknown()).optional() });
 
 // ---- content script -> service worker --------------------------------------
 
 export const ContentToBackground = z.discriminatedUnion("type", [
   z.object({ type: z.literal("tab.state"), account: AccountSchema.nullable(), sessionError: SerializedErrorSchema.nullable(), selection: SelectionSchema }),
-  z.object({ type: z.literal("ui.openSplitEditor"), mediaKey: z.string().min(10) }),
+  z.object({ type: z.literal("ui.openTool"), tool: ToolSchema, mediaKeys: MediaKeysSchema }),
   z.object({ type: z.literal("ui.openSidePanel") }),
+  z.object({ type: z.literal("ui.openScan"), mediaKeys: ScanSelectionSchema }),
 ]);
 export type ContentToBackground = z.infer<typeof ContentToBackground>;
 
@@ -41,8 +50,9 @@ export type ContentToBackground = z.infer<typeof ContentToBackground>;
 
 export const PageToBackground = z.discriminatedUnion("type", [
   z.object({ type: z.literal("panel.getState"), windowId: z.number().int() }),
-  z.object({ type: z.literal("panel.openSplitEditor"), tabId: z.number().int(), mediaKey: z.string().min(10) }),
+  z.object({ type: z.literal("panel.openTool"), tool: ToolSchema, tabId: z.number().int(), mediaKeys: MediaKeysSchema }),
   z.object({ type: z.literal("photos.resolveTab"), email: z.string(), preferredTabId: z.number().int().nullable() }),
+  z.object({ type: z.literal("panel.openScan"), tabId: z.number().int(), mediaKeys: ScanSelectionSchema }),
 ]);
 export type PageToBackground = z.infer<typeof PageToBackground>;
 
@@ -59,6 +69,13 @@ export const PageToContent = z.discriminatedUnion("type", [
     takenAtMs: z.number().optional(),
     timezoneOffsetMs: z.number().optional(),
   }),
+  z.object({ type: z.literal("photos.listLibrary"), expectedEmail: z.string(), page: PageTokenSchema, startMs: z.number().nullable() }),
+  z.object({ type: z.literal("photos.listAlbums"), expectedEmail: z.string(), page: PageTokenSchema }),
+  z.object({ type: z.literal("photos.listAlbumItems"), expectedEmail: z.string(), albumKey: z.string().min(10), page: PageTokenSchema }),
+  z.object({ type: z.literal("photos.getItemDetails"), expectedEmail: z.string(), mediaKey: z.string().min(10) }),
+  z.object({ type: z.literal("photos.thumbnail"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000), maxSide: z.number().int().min(64).max(2048) }),
+  z.object({ type: z.literal("photos.addToAlbum"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(50), album: AlbumRefSchema }),
+  z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
 ]);
 export type PageToContent = z.infer<typeof PageToContent>;
 
@@ -82,11 +99,19 @@ export interface PanelState {
 
 export interface ReplyMap {
   "panel.getState": PanelState;
-  "panel.openSplitEditor": { editorTabId: number };
+  "panel.openTool": { editorTabId: number };
   "photos.resolveTab": { tabId: number };
   "photos.getItem": MediaItemInfo;
   "photos.downloadOriginal": { bytesBase64: string; mimeType: string };
   "photos.uploadPhoto": CreatedMediaItem;
+  "photos.listLibrary": Page<LibraryItem>;
+  "photos.listAlbums": Page<AlbumRef>;
+  "photos.listAlbumItems": Page<LibraryItem>;
+  "photos.getItemDetails": ItemDetails;
+  "photos.thumbnail": { bytesBase64: string; mimeType: string };
+  "photos.addToAlbum": null;
+  "photos.setDescription": null;
+  "panel.openScan": { scanTabId: number };
 }
 
 // ---- helpers -----------------------------------------------------------------

@@ -7,6 +7,7 @@
 
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import { ContentToBackground, Messenger, PageToBackground, type PanelState, type TabState } from "../messaging/protocol.js";
+import { SCAN_PAGE, SCAN_SELECTION_PREFIX, TOOLS, type ToolId } from "../tools.js";
 
 class TabRegistry {
   static readonly KEY = "pixlixir.tabs";
@@ -54,11 +55,13 @@ class BackgroundRouter {
         case "tab.state":
           await this.tabs.put({ tabId, account: msg.account, sessionError: msg.sessionError, selection: msg.selection, updatedAt: Date.now() });
           return null;
-        case "ui.openSplitEditor":
-          return this.openSplitEditor(tabId, msg.mediaKey);
+        case "ui.openTool":
+          return this.openTool(msg.tool, tabId, msg.mediaKeys);
         case "ui.openSidePanel":
           await chrome.sidePanel.open({ tabId });
           return null;
+        case "ui.openScan":
+          return this.openScan(tabId, msg.mediaKeys);
       }
     }
 
@@ -68,10 +71,12 @@ class BackgroundRouter {
       switch (msg.type) {
         case "panel.getState":
           return this.panelState(msg.windowId);
-        case "panel.openSplitEditor":
-          return this.openSplitEditor(msg.tabId, msg.mediaKey);
+        case "panel.openTool":
+          return this.openTool(msg.tool, msg.tabId, msg.mediaKeys);
         case "photos.resolveTab":
           return this.resolveTab(msg.email, msg.preferredTabId);
+        case "panel.openScan":
+          return this.openScan(msg.tabId, msg.mediaKeys);
       }
     }
 
@@ -84,16 +89,46 @@ class BackgroundRouter {
     return { activeIsPhotos: isPhotos, activeTab: isPhotos && active?.id !== undefined ? await this.tabs.get(active.id) : null };
   }
 
-  /** Opens the split editor bound to the account currently signed in on that tab. */
-  private async openSplitEditor(tabId: number, mediaKey: string): Promise<{ editorTabId: number }> {
+  /** Opens an editor tool bound to the account currently signed in on that tab. */
+  private async openTool(tool: ToolId, tabId: number, mediaKeys: string[]): Promise<{ editorTabId: number }> {
+    const spec = TOOLS[tool];
+    if (mediaKeys.length < spec.minPhotos || mediaKeys.length > spec.maxPhotos) {
+      throw new PixError(ErrorCode.InvalidMessage, spec.hint, { tool, photos: mediaKeys.length });
+    }
+    const email = await this.boundEmail(tabId);
+    return { editorTabId: await this.openPage(spec.page, tabId, { tab: String(tabId), email, media: mediaKeys.join(",") }) };
+  }
+
+  /**
+   * Opens the library scan bound to the tab's account. A selection is parked in session
+   * storage (it can be thousands of keys); an album open in the tab preselects that album.
+   */
+  private async openScan(tabId: number, mediaKeys: string[]): Promise<{ scanTabId: number }> {
+    const email = await this.boundEmail(tabId);
+    const params: Record<string, string> = { tab: String(tabId), email };
+    if (mediaKeys.length > 0) {
+      const id = crypto.randomUUID();
+      await chrome.storage.session.set({ [SCAN_SELECTION_PREFIX + id]: mediaKeys });
+      params.sel = id;
+    }
+    const album = /\/album\/([A-Za-z0-9_-]{10,})/.exec((await chrome.tabs.get(tabId)).url ?? "")?.[1];
+    if (album) params.album = album;
+    return { scanTabId: await this.openPage(SCAN_PAGE, tabId, params) };
+  }
+
+  private async boundEmail(tabId: number): Promise<string> {
     const state = await this.tabs.get(tabId);
     if (!state?.account) {
       throw new PixError(ErrorCode.TabNotBound, "This Google Photos tab has no detected account yet. Reload the tab and try again.", { tabId });
     }
-    const url = chrome.runtime.getURL(`split.html?${new URLSearchParams({ tab: String(tabId), email: state.account.email, media: mediaKey }).toString()}`);
-    const created = await chrome.tabs.create({ url, index: ((await chrome.tabs.get(tabId)).index ?? 0) + 1 });
-    if (created.id === undefined) throw new PixError(ErrorCode.Internal, "Editor tab was not created");
-    return { editorTabId: created.id };
+    return state.account.email;
+  }
+
+  private async openPage(page: string, nextToTabId: number, params: Record<string, string>): Promise<number> {
+    const url = chrome.runtime.getURL(`${page}?${new URLSearchParams(params).toString()}`);
+    const created = await chrome.tabs.create({ url, index: ((await chrome.tabs.get(nextToTabId)).index ?? 0) + 1 });
+    if (created.id === undefined) throw new PixError(ErrorCode.Internal, "Extension tab was not created", { page });
+    return created.id;
   }
 
   /** Finds a live Photos tab signed in as `email`, preferring the original one. Never substitutes another account. */

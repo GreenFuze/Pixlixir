@@ -3,8 +3,8 @@
  * Runs ONLY inside the Photos tab's content script (where the session tokens live).
  */
 
-import type { AccountRef, Capability, CreatedMediaItem, MediaItemInfo } from "../domain/types.js";
-import { itemWebUrl, RenditionUrl, type PhotosLibraryAdapter, type UploadOptions } from "./adapter.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
+import { CONTENT_URL, itemWebUrl, RenditionUrl, type LibraryCursor, type PhotosLibraryAdapter, type UploadOptions } from "./adapter.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
 import { LIVE_CAPABILITIES } from "./capabilities.js";
 import { BatchExecuteClient, type FetchLike } from "./protocol/batchexecute.js";
@@ -82,6 +82,47 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
       height: created.height,
       webUrl: itemWebUrl(this.account, created.mediaKey),
     };
+  }
+
+  listLibrary(cursor: LibraryCursor): Promise<Page<LibraryItem>> {
+    return this.#rpc.listLibrary(cursor.page, cursor.startMs);
+  }
+
+  listAlbums(page: string | null): Promise<Page<AlbumRef>> {
+    return this.#rpc.listAlbums(page);
+  }
+
+  listAlbumItems(albumKey: string, page: string | null): Promise<Page<LibraryItem>> {
+    return this.#rpc.albumPage(albumKey, page);
+  }
+
+  getItemDetails(mediaKey: string): Promise<ItemDetails> {
+    return this.#rpc.getItemDetails(mediaKey);
+  }
+
+  async fetchThumbnail(baseUrl: string, maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    // Paragraph: only Google's image CDN, at a bounded size.
+    if (!CONTENT_URL.test(baseUrl)) throw new PixError(ErrorCode.InvalidMessage, "Refused to fetch a thumbnail from an unexpected address.");
+    const side = Math.max(64, Math.min(2048, Math.round(maxSide)));
+    let res: Response;
+    try {
+      res = await this.#fetch(RenditionUrl.build(baseUrl, { kind: "fit", maxWidth: side, maxHeight: side }), { method: "GET", credentials: "include" });
+    } catch (err) {
+      throw PixError.wrap(err, ErrorCode.MediaFetchFailed, "Could not download a thumbnail");
+    }
+    if (!res.ok) throw new PixError(ErrorCode.MediaFetchFailed, `Downloading a thumbnail failed (HTTP ${res.status})`, { status: res.status });
+    const blob = await res.blob();
+    if (!blob.type.startsWith("image/")) throw new PixError(ErrorCode.MediaDecodeFailed, `Expected an image thumbnail but received ${blob.type || "unknown content"}`);
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+  }
+
+  async addToAlbum(mediaKeys: readonly string[], album: AlbumRef): Promise<void> {
+    if (album.shared) await this.#rpc.addToSharedAlbum(mediaKeys, album.mediaKey);
+    else await this.#rpc.addToAlbum(mediaKeys, album.mediaKey);
+  }
+
+  setDescription(dedupKey: string, description: string): Promise<void> {
+    return this.#rpc.setDescription(dedupKey, description);
   }
 
   capabilities(): Capability[] {

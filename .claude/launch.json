@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "editor-sandbox",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5174", "--bind", "127.0.0.1"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/dev/serve.mjs", "5174"],
       "port": 5174
     }
   ]

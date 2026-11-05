@@ -4,10 +4,13 @@
  */
 
 import type { Selection } from "../../gphotos/dom/selection.js";
+import { ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 export interface LauncherActions {
   openPanel(): void;
-  splitIntoPhotos(mediaKey: string): void;
+  openTool(tool: ToolId, mediaKeys: string[]): void;
+  /** Opens the library scan; selected photos (if any) become its default scope. */
+  openScan(mediaKeys: string[]): void;
 }
 
 const STYLE = `
@@ -103,16 +106,20 @@ export class Launcher {
       p.textContent = this.#problem;
       this.#menu.append(p);
     }
-    const single = items.length === 1 && items[0]!.type !== "video" ? items[0]! : null;
-    this.#menu.append(
-      this.button("Split into Photos", single === null || this.#problem !== null, () => single && this.actions.splitIntoPhotos(single.mediaKey)),
-      this.button("Open Pixlixir panel", false, () => this.actions.openPanel()),
-    );
-    if (!single) {
-      const hint = this.doc.createElement("div");
-      hint.className = "hint";
-      hint.textContent = "Select or open one scanned photo to split it into separate pictures.";
-      this.#menu.append(hint);
+    const eligible = TOOL_IDS.map((tool) => ({ tool, keys: ToolEligibility.mediaKeys(tool, items) }));
+    for (const { tool, keys } of eligible) {
+      this.#menu.append(this.button(TOOLS[tool].label, keys === null || this.#problem !== null, () => keys && this.actions.openTool(tool, keys)));
+    }
+    const photoKeys = items.filter((i) => i.type !== "video").map((i) => i.mediaKey);
+    this.#menu.append(this.button(photoKeys.length > 1 ? `Scan ${photoKeys.length} selected for panoramas…` : "Scan library for panoramas…", this.#problem !== null, () => this.actions.openScan(photoKeys.length > 1 ? photoKeys : [])));
+    this.#menu.append(this.button("Open Pixlixir panel", false, () => this.actions.openPanel()));
+    if (eligible.every((e) => e.keys === null)) {
+      for (const tool of TOOL_IDS) {
+        const hint = this.doc.createElement("div");
+        hint.className = "hint";
+        hint.textContent = TOOLS[tool].hint;
+        this.#menu.append(hint);
+      }
     }
   }
 

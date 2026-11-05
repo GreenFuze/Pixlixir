@@ -42,9 +42,31 @@ Live-verified on 2026-11-04 from page context: `VrseUb`, `fDcn4b`, `mdpdU`, `DaS
 | `mdpdU` | Commit an upload | `[[[uploadToken, fileName, clientTimeMs, 2, 2]]]` | `[0][0][1]` = new item: `[0]` mediaKey, `[1][1..2]` w/h, `[3]` dedupKey | live-verified |
 | `DaSgWe` | Set capture time | `[[[dedupKey, takenSec, tzSec]]]` | (none) — verified by reading back via `VrseUb` | live-verified |
 
-Other RPCs seen in traffic or GPTK (not used yet): `lcxiM` library page, `swbisb` hash lookup
-(the web client calls it before uploading), `Z5xsfc` albums, `XwAOJf` trash/restore, `EtUHOe`
-location, `AQNOFd` description, `OXvT9d`/`E1Cajb` albums. See the master list for status.
+## RPCs added for the library scan (2026-11-05)
+
+Read-only checks ran in the signed-in tab (shapes and booleans printed, no content or keys).
+Writes were checked with two synthetic 320×200 JPEGs (fake GPS, then moved to Trash) and a
+test album "Pixlixir probe - safe to delete" (left for the user to delete).
+
+| RPC | Purpose | Request | Response fields used | Status |
+|---|---|---|---|---|
+| `lcxiM` | Library timeline | `[pageId, startMs, 500, null, 1, 3]` | `[0]` rows (newest first), `[1]` next page id, `[2]` last timestamp. Row: `[0]` mediaKey, `[1][0]` base URL, `[1][1..2]` w/h, `[2]` taken ms, `[3]` dedupKey, `[4]` tz ms, last element = ext object (`76647426` video, `129168200[1][0]` = [latE7, lngE7]) | live-verified (ordering, paging, start time) |
+| `Z5xsfc` | Albums | `[pageId, null, null, null, 1, null, null, 100, [2], 5]` | `[0]` rows: `[0]` album key, ext `72930366[1]` title; `[1]` next | live-verified; album URL `/album/<key>` uses the same key |
+| `snAcKc` | Album items | `[albumKey, pageId, null, null]` | `[1]` rows (shape as `lcxiM`), `[2]` next (`""` when none) | live-verified. **Row `[0]` is an album-specific item key, not the library key**; `[3]` dedupKey matches. `VrseUb`/`fDcn4b` accept the album item key |
+| `fDcn4b` | Item details | `[mediaKey, 1, null, null, 1]` | `[0][1]` description, `[0][11]` dedupKey, `[0][13][0]` / `[0][9][0]` [latE7, lngE7], `[0][19]` albums, `[0][23]` camera `[make, model, …]` | live-verified |
+| `E1Cajb` | Add to own album | `[[mediaKeys], albumKey]` | response `[albumKey, …]` (not used); verified via `fDcn4b[0][19]` and album item count | live-verified |
+| `laUYf` | Add to shared album | `[albumKey, [2, null, [[[key]]…], null, null, null, [1]]]` | — | implemented per GPTK, **not** live-verified |
+| `AQNOFd` | Set description | `[null, text, dedupKey]` | `[]`; read back via `fDcn4b[0][1]` | live-verified |
+| `OXvT9d` | Create album | `[title, null, 2]` | `[0][0]` album key | probe only (not used by Pixlixir) |
+| `XwAOJf` | Move to trash | `[null, 1, [dedupKeys], 3]` | — ; items appear in `zy0IHe` (trash) and leave the timeline and albums | probe clean-up only |
+
+Location on upload: an uploaded JPEG's EXIF GPS becomes the item's location immediately
+(`fDcn4b[0][13][0]` = the EXIF coordinates ×1e7). EXIF `DateTimeOriginal` without an offset is
+read as local time in an account zone (10:00 → 09:00Z in this account); Pixlixir sets the
+capture time explicitly with `DaSgWe` after upload, so this does not matter.
+
+Other RPCs seen in traffic or GPTK (not used yet): `swbisb` hash lookup (the web client calls
+it before uploading), `EtUHOe` location of existing items, `zy0IHe` trash listing.
 
 ## Media bytes
 

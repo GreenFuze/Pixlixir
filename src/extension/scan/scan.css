@@ -1,0 +1,30 @@
+/* Library scan page. Shared chrome comes from editor.css. */
+.scan-main { flex: 1; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.scan-main > .card { width: min(1100px, 100%); margin-inline: auto; }
+.setup { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+.setup .group { display: flex; flex-direction: column; gap: 6px; }
+.field.inline { display: inline-flex; align-items: center; gap: 6px; }
+.status-bar { display: flex; flex-direction: column; gap: 6px; }
+.progress-line { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.progress-line progress { flex: 1; max-width: 320px; }
+.center-text { text-align: center; padding: 24px; }
+
+.cands { list-style: none; margin: 0 auto; padding: 0; width: min(1100px, 100%); display: flex; flex-direction: column; gap: 10px; }
+.cand { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.cand.created { border-color: var(--ok, #2e7d32); }
+.cand.failed { border-color: var(--danger); }
+.cand.working { border-color: var(--accent); }
+.cand-preview { display: grid; place-items: center; background: var(--surface-2); border-radius: 8px; min-height: 120px; overflow: hidden; }
+.cand-preview img { width: 100%; max-height: 220px; object-fit: contain; display: block; }
+.cand-preview .pad { padding: 16px; }
+.cand-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.strip { display: flex; gap: 4px; overflow-x: auto; padding-block-end: 2px; }
+.strip img, .strip .ph { height: 44px; width: auto; min-width: 44px; border-radius: 4px; object-fit: cover; background: var(--surface-2); }
+.strip img.dup { opacity: .45; outline: 1px dashed var(--border); }
+
+.results { display: flex; flex-direction: column; gap: 6px; border-color: var(--ok, #2e7d32); }
+.made { list-style: none; margin: 4px 0 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.made a { display: flex; flex-direction: column; gap: 2px; font-size: 12px; text-decoration: none; }
+.made img { height: 64px; max-width: 220px; object-fit: cover; border-radius: 6px; }
+
+@media (max-width: 760px) { .cand { grid-template-columns: 1fr; } }

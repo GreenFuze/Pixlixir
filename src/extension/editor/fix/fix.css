@@ -1,0 +1,19 @@
+/* Fix feature panel (fix/fix-panel.tsx). */
+.fx-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 10; }
+.fx { width: min(1400px, 96vw); height: min(900px, 94vh); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
+.fx-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-block-end: 1px solid var(--border); }
+.fx-body { flex: 1; display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+.fx-stage { display: flex; flex-direction: column; min-height: 0; background: repeating-conic-gradient(var(--surface-2) 0 25%, var(--bg) 0 50%) 0 0 / 24px 24px; }
+.fx-canvas { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; overflow: hidden; touch-action: none; user-select: none; }
+.fx-frame { position: relative; line-height: 0; }
+.fx-frame > img:first-child { display: block; max-width: calc(min(1400px, 96vw) - 320px - 40px); max-height: calc(min(900px, 94vh) - 140px); }
+.fx-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.fx-canvas.painting { cursor: crosshair; }
+.fx-badge { position: absolute; top: 8px; inset-inline-start: 8px; background: rgba(0,0,0,.6); color: #fff; padding: 2px 8px; border-radius: 6px; font-size: 12px; line-height: 1.4; }
+.fx-stagebar { display: flex; gap: 14px; align-items: center; padding: 8px 12px; background: var(--surface); border-block-start: 1px solid var(--border); }
+.fx-controls { border-inline-start: 1px solid var(--border); padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.fx-group { display: flex; flex-direction: column; gap: 6px; padding-block-end: 12px; border-block-end: 1px solid var(--border); }
+.fx-toggle { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
+.fx-slider { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; font-size: 12px; }
+.fx-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+@media (max-width: 900px) { .fx-frame > img:first-child { max-width: calc(96vw - 40px); max-height: calc(50vh - 100px); } .fx-body { grid-template-columns: 1fr; grid-template-rows: 1fr 45%; } .fx-controls { border-inline-start: none; border-block-start: 1px solid var(--border); } }

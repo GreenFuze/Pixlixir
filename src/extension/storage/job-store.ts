@@ -7,6 +7,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { AdjustmentPresets, type Adjustments } from "../../imaging/enhance/adjustments.js";
 import type { Quad } from "../../imaging/geometry.js";
+import type { StitchSettings } from "../../imaging/panorama/stitch-runtime.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 
 export type SplitJobStatus = "editing" | "saving" | "done" | "partial" | "failed";
@@ -38,8 +39,42 @@ export interface SplitJob {
   updatedAt: number;
 }
 
+/** What a saved panorama took over from its photos (recorded so the user can see it). */
+export interface InheritedRecord {
+  takenAtMs: number | null;
+  location: boolean;
+  description: boolean;
+  albums: string[];
+  /** Post-upload steps that failed, as messages. */
+  problems: string[];
+}
+
+export interface PanoramaJob {
+  id: string;
+  kind: "panorama";
+  /** Set when the panorama was created in bulk from a library scan (one id per run). */
+  batchId?: string | null;
+  inherited?: InheritedRecord | null;
+  accountEmail: string;
+  /** First source (keeps the bySource index meaningful); all sources are in sourceMediaKeys. */
+  sourceMediaKey: string;
+  sourceMediaKeys: string[];
+  /** Sources that made it into the saved panorama. */
+  usedMediaKeys: string[];
+  /** Their dedup keys (stable across library and album views, unlike album item keys). */
+  usedDedupKeys?: string[];
+  settings: StitchSettings;
+  status: "editing" | "saving" | "done" | "failed";
+  saved: { mediaKey: string; webUrl: string; fileName: string; width: number; height: number } | null;
+  error: SerializedError | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PixJob = SplitJob | PanoramaJob;
+
 interface PixDb extends DBSchema {
-  jobs: { key: string; value: SplitJob; indexes: { bySource: [string, string]; byUpdated: number } };
+  jobs: { key: string; value: PixJob; indexes: { bySource: [string, string]; byUpdated: number } };
 }
 
 export class JobStore {
@@ -67,16 +102,16 @@ export class JobStore {
     this.db.close();
   }
 
-  async put(job: SplitJob): Promise<SplitJob> {
+  async put<J extends PixJob>(job: J): Promise<J> {
     const stored = { ...job, updatedAt: Date.now() };
     await this.db.put("jobs", stored);
     return stored;
   }
 
-  async get(id: string): Promise<SplitJob> {
+  async get(id: string): Promise<PixJob> {
     const job = await this.db.get("jobs", id);
     if (!job) throw new PixError(ErrorCode.JobNotFound, `Job ${id} not found`, { id });
-    return JobStore.upgrade(job);
+    return job.kind === "split" ? JobStore.upgrade(job) : job;
   }
 
   /** Jobs written by v0.1 have no per-photo adjustments: give them the auto defaults. */
@@ -84,15 +119,21 @@ export class JobStore {
     return { ...job, prints: job.prints.map((p) => ((p as Partial<SplitPrintRecord>).adjustments ? p : { ...p, adjustments: AdjustmentPresets.auto() })) };
   }
 
-  /** Most recent unfinished job for a source item, so the editor can resume it. */
+  /** Most recent unfinished split job for a source item, so the split editor can resume it. */
   async latestOpenForSource(accountEmail: string, mediaKey: string): Promise<SplitJob | null> {
     const all = await this.db.getAllFromIndex("jobs", "bySource", [accountEmail, mediaKey]);
-    const open = all.filter((j) => j.status !== "done").sort((a, b) => b.updatedAt - a.updatedAt);
+    const open = all.filter((j): j is SplitJob => j.kind === "split" && j.status !== "done").sort((a, b) => b.updatedAt - a.updatedAt);
     return open[0] ? JobStore.upgrade(open[0]) : null;
   }
 
-  async recent(limit: number): Promise<SplitJob[]> {
-    const out: SplitJob[] = [];
+  /** Saved panoramas of an account (to recognise photo groups that already have one). */
+  async savedPanoramas(accountEmail: string): Promise<PanoramaJob[]> {
+    const all = await this.db.getAll("jobs");
+    return all.filter((j): j is PanoramaJob => j.kind === "panorama" && j.status === "done" && j.accountEmail === accountEmail);
+  }
+
+  async recent(limit: number): Promise<PixJob[]> {
+    const out: PixJob[] = [];
     let cursor = await this.db.transaction("jobs").store.index("byUpdated").openCursor(null, "prev");
     while (cursor && out.length < limit) {
       out.push(cursor.value);

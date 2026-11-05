@@ -6,12 +6,18 @@
  * web protocol; MockPhotosAdapter backs tests and offline UI development.
  */
 
-import type { AccountRef, Capability, CreatedMediaItem, MediaItemInfo } from "../domain/types.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
 
 export interface UploadOptions {
   /** If set, the created item's capture time is set to this (keeps it next to its source in the timeline). */
   takenAtMs?: number;
   timezoneOffsetMs?: number;
+}
+
+/** Where to continue a library listing: a page token, or a capture time to start from (newest first). */
+export interface LibraryCursor {
+  page: string | null;
+  startMs: number | null;
 }
 
 export interface PhotosLibraryAdapter {
@@ -20,8 +26,24 @@ export interface PhotosLibraryAdapter {
   /** Full-resolution bytes of a photo. */
   downloadOriginal(mediaKey: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   uploadPhoto(bytes: Uint8Array, fileName: string, options: UploadOptions): Promise<CreatedMediaItem>;
+
+  // ---- reading the library (read-only) ----
+  listLibrary(cursor: LibraryCursor): Promise<Page<LibraryItem>>;
+  listAlbums(page: string | null): Promise<Page<AlbumRef>>;
+  listAlbumItems(albumKey: string, page: string | null): Promise<Page<LibraryItem>>;
+  getItemDetails(mediaKey: string): Promise<ItemDetails>;
+  /** A resized JPEG of an item, from a base URL returned by a listing. */
+  fetchThumbnail(baseUrl: string, maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }>;
+
+  // ---- organising new items (never changes existing photos) ----
+  addToAlbum(mediaKeys: readonly string[], album: AlbumRef): Promise<void>;
+  setDescription(dedupKey: string, description: string): Promise<void>;
+
   capabilities(): Capability[];
 }
+
+/** Base URLs handed to fetchThumbnail must point at Google's image CDN (never an arbitrary URL). */
+export const CONTENT_URL = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\/[^\s]+$/;
 
 export type Rendition = { kind: "original" } | { kind: "fit"; maxWidth: number; maxHeight: number };
 

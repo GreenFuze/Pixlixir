@@ -5,19 +5,20 @@ import { useEffect, useState } from "preact/hooks";
 import { LIVE_CAPABILITIES } from "../../gphotos/capabilities.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { Messenger, type PanelState } from "../messaging/protocol.js";
-import { JobStore, type SplitJob } from "../storage/job-store.js";
+import { JobStore, type PixJob } from "../storage/job-store.js";
+import { ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 /** Actions shown for context but not yet built — labelled honestly. */
-const PLANNED = ["Restore damaged photo", "Edit with AI", "Find duplicates", "Fix date & location", "Create panorama"];
+const PLANNED = ["Fix a photo (restore, lighting, colour)", "Edit with AI", "Find duplicates", "Fix date & location", "HDR / focus stacking"];
 
 class PanelModel {
-  async load(): Promise<{ state: PanelState; jobs: SplitJob[] }> {
+  async load(): Promise<{ state: PanelState; jobs: PixJob[] }> {
     const win = await chrome.windows.getCurrent();
     if (win.id === undefined) throw new PixError(ErrorCode.Internal, "No current window");
     const state = await Messenger.toBackground({ type: "panel.getState", windowId: win.id });
     const store = await JobStore.open();
     try {
-      return { state, jobs: await store.recent(8) };
+      return { state, jobs: await store.recent(12) };
     } finally {
       store.close();
     }
@@ -39,7 +40,7 @@ class PanelModel {
 }
 
 function App(props: { model: PanelModel }) {
-  const [data, setData] = useState<{ state: PanelState; jobs: SplitJob[] } | null>(null);
+  const [data, setData] = useState<{ state: PanelState; jobs: PixJob[] } | null>(null);
   const [error, setError] = useState<SerializedError | null>(null);
 
   useEffect(() => {
@@ -55,14 +56,24 @@ function App(props: { model: PanelModel }) {
   const tab = data?.state.activeTab ?? null;
   const sel = tab?.selection;
   const items = sel?.kind === "grid" ? sel.items : sel?.kind === "viewer" ? [sel.item] : [];
-  const single = items.length === 1 && items[0]!.type !== "video" ? items[0]! : null;
+  const eligible = TOOL_IDS.map((tool) => ({ tool, keys: ToolEligibility.mediaKeys(tool, items) }));
 
-  const openSplit = async () => {
-    if (!tab || !single) return;
+  const openTool = async (tool: ToolId, mediaKeys: string[]) => {
+    if (!tab) return;
     try {
-      await Messenger.toBackground({ type: "panel.openSplitEditor", tabId: tab.tabId, mediaKey: single.mediaKey });
+      await Messenger.toBackground({ type: "panel.openTool", tool, tabId: tab.tabId, mediaKeys });
     } catch (err) {
       setError((err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Could not open editor")).toJSON());
+    }
+  };
+
+  const photoKeys = items.filter((i) => i.type !== "video").map((i) => i.mediaKey);
+  const openScan = async () => {
+    if (!tab) return;
+    try {
+      await Messenger.toBackground({ type: "panel.openScan", tabId: tab.tabId, mediaKeys: photoKeys.length > 1 ? photoKeys : [] });
+    } catch (err) {
+      setError((err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Could not open the scan")).toJSON());
     }
   };
 
@@ -94,9 +105,19 @@ function App(props: { model: PanelModel }) {
           <section class="card">
             <div class="label">Selection</div>
             <div>{items.length === 0 ? <span class="muted">Nothing selected. Select or open a photo.</span> : `${items.length} item${items.length === 1 ? "" : "s"} selected`}</div>
+            {eligible.map(({ tool, keys }) => (
+              <div class="actions" key={tool}>
+                <button class="btn primary" disabled={!keys || !tab?.account} onClick={() => keys && void openTool(tool, keys)}>{TOOLS[tool].label}</button>
+                {!keys && <span class="muted small">{TOOLS[tool].hint}</span>}
+              </div>
+            ))}
+          </section>
+
+          <section class="card">
+            <div class="label">Scan library</div>
+            <div class="muted small">Finds groups of overlapping photos in a date range, an album, your selection or the whole library, previews them, and creates the panoramas you pick.</div>
             <div class="actions">
-              <button class="btn primary" disabled={!single || !tab?.account} onClick={() => void openSplit()}>Split into Photos</button>
-              {!single && <span class="muted small">Works on exactly one photo (e.g. a scanned album page).</span>}
+              <button class="btn" disabled={!tab?.account} onClick={() => void openScan()}>{photoKeys.length > 1 ? `Scan ${photoKeys.length} selected for panoramas…` : "Scan for panoramas…"}</button>
             </div>
             <details class="planned">
               <summary class="muted small">Planned actions</summary>
@@ -111,11 +132,20 @@ function App(props: { model: PanelModel }) {
           <div class="label">Recent work</div>
           <ul class="jobs">
             {data.jobs.map((j) => {
+              const status = <span class={`pill ${j.status === "done" ? "ok" : j.status === "failed" ? "danger" : ""}`}>{j.status}</span>;
+              if (j.kind === "panorama") {
+                return (
+                  <li key={j.id}>
+                    <div>Panorama of {j.sourceMediaKeys.length} photos{j.batchId ? <span class="muted small"> · from a scan</span> : null}</div>
+                    <div class="muted small">{j.accountEmail} · {j.saved ? <a href={j.saved.webUrl} target="_blank" rel="noreferrer">open ↗</a> : "not saved"} · {status}</div>
+                  </li>
+                );
+              }
               const saved = j.prints.filter((p) => p.saved).length;
               return (
                 <li key={j.id}>
                   <div>Split {j.sourceFileName ?? "scan"}</div>
-                  <div class="muted small">{j.accountEmail} · {saved}/{j.prints.filter((p) => p.included).length} saved · <span class={`pill ${j.status === "done" ? "ok" : j.status === "failed" ? "danger" : ""}`}>{j.status}</span></div>
+                  <div class="muted small">{j.accountEmail} · {saved}/{j.prints.filter((p) => p.included).length} saved · {status}</div>
                 </li>
               );
             })}

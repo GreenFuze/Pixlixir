@@ -48,17 +48,17 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | ID | Capability | Phase | Status |
 |---|---|---|---|
 | G-01 | Read session context (account email/id, `/u/N`, tokens) without exporting secrets | 1 | live-verified |
-| G-02 | Enumerate library (paged timeline) | 2 | research |
+| G-02 | Enumerate library (paged timeline, from any capture time) — `lcxiM`, used by the library scan | 2 | live-verified |
 | G-03 | Get item info (dimensions, timestamp, filename, size, type) | 2 | live-verified |
 | G-04 | Thumbnails at arbitrary size | 1 | live-verified |
 | G-05 | Original-quality bytes (photos) | 2 | live-verified |
 | G-06 | Original bytes for video / HEIC / RAW | 2 | research |
-| G-07 | List albums / album items | 2 | research |
+| G-07 | List albums / album items — `Z5xsfc`, `snAcKc` (album items carry album-specific keys; dedup keys match the library) | 2 | live-verified |
 | G-08 | Upload new media item | 3 | live-verified |
-| G-09 | Create album / add to album | 3 | research |
+| G-09 | Add to album — `E1Cajb` (own albums) live-verified; shared albums (`laUYf`) implemented, unverified; create album (`OXvT9d`) verified by the probe only | 3 | live-verified |
 | G-10 | Set date/time | 4 | live-verified |
-| G-11 | Set location | 4 | research |
-| G-12 | Set description | 4 | research |
+| G-11 | Set location — new uploads: EXIF GPS is read by Google immediately (live-verified); changing an existing item's location (`EtUHOe`) still research | 4 | implemented |
+| G-12 | Set description — `AQNOFd`, read back via `fDcn4b` | 4 | live-verified |
 | G-13 | Trash / restore from trash | 4 | research |
 | G-14 | Replace image content in place (no new item) | 4 | research |
 | G-15 | Shared albums / partner sharing coverage | 4 | research |
@@ -106,19 +106,44 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| C-01 | Panorama: overlap analysis, arrangement, align, projection, exposure, seam blend, crop, save | 4 | todo |
+| C-01 | **Create panorama**: overlap analysis, arrangement, align, projection, exposure, seam blend, crop or fill edges, save (OpenCV + OpenStitching in Pyodide, ADR-0005) | 4 | implemented |
 | C-02 | Panorama manual correction (control points) | 4 | todo |
-| C-03 | Cylindrical / spherical 360° panoramas | 6 | todo |
+| C-03 | Cylindrical / spherical / Panini / Mercator / fisheye projections (built); full 360° wrap-around untested | 6 | implemented |
 | C-04 | HDR merge (align + natural/aggressive tone mapping) | 4 | todo |
 | C-05 | Focus stacking | 4 | todo |
 | C-06 | Best-shot group composition (marked as composite) | 6 | todo |
 | C-07 | Multi-image super-resolution | 6 | research |
 | C-08 | Long-exposure simulation; tourist removal | 6 | research |
-| C-09 | Combine overlapping scans | 6 | research |
+| C-09 | Combine overlapping scans / documents / posters shot in parts (panorama "Moving over a flat surface" mode) | 6 | implemented |
 | C-10 | Collages / simple composites | 6 | research |
 | C-11 | Multi-capture reflection removal | 6 | research |
+| C-12 | Panorama: generative fill of empty edges (today: classical inpainting, marked as made-up) | 4 | todo |
+| C-13 | Panorama from a video pan | 5 | research |
+| C-14 | Panorama: AI feature matching (ALIKED + LightGlue) for low-texture scenes | 4 | research |
+| C-15 | **Bulk create panoramas** from a library scan; every panorama (bulk or editor) inherits the earliest photo's date and EXIF, the photos' location and description, and is added to the same albums | 4 | implemented |
+
+## L — Library scan
+
+One scan lists a scope once and runs pluggable detectors over it (ADR-0006); each detector
+offers a review and a bulk action. New checks are added as detectors.
+
+| ID | Feature | Phase | Status |
+|---|---|---|---|
+| L-01 | **Scan library**: scope = date range, album, selection or whole library; findings stream in; review, select, bulk action, results page + recent work | 4 | implemented |
+| L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart, confirmed by feature matching; retakes set aside; preview per group; "already made" recognised | 4 | implemented |
+| L-03 | Detector: metadata problems (wrong dates/time zones, missing location — M-01, M-03) | 4 | todo |
+| L-04 | Detector: duplicates / near-duplicates (D section) | 4 | todo |
+| L-05 | Detector: album-page scans to split (R-01), HDR / focus brackets (C-04, C-05) | 4 | todo |
+| L-06 | Resumable scans and a scan history (today a scan lives in its tab; created items are recorded) | 4 | todo |
 
 ## R — Restore & Digitize
+
+**Split** and **Fix** are separate features. Fix (per-photo repair, lighting, colour, glare)
+has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
+`FixController` contract; Split hosts it for each print today, and a standalone
+"Fix a photo" tool (R-20) will host it for any library photo.
+
+### Split into Photos
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
@@ -126,21 +151,27 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | R-02 | Split: adjust boundaries, add missed, remove false detections | 3 | implemented |
 | R-03 | Split: crop/straighten/perspective-correct each print | 3 | implemented |
 | R-04 | Split: save each as a new item; original untouched; provenance recorded | 3 | implemented |
-| R-05 | Split: optional per-print enhancement | 4 | implemented |
+| R-05 | Split runs **Fix** on every print (Split hosts the Fix feature; see below) | 4 | implemented |
+| R-19 | Automatic print orientation (detect sideways/upside-down prints; today: per-photo and "rotate all" buttons) | 3 | research |
+| R-12 | Multi-exposure scan fusion | 6 | research |
+| R-13 | Negatives (incl. orange mask) and slides | 6 | todo |
+| R-14 | Front/back pairing + OCR/handwriting extraction (never auto-verified) | 4 | todo |
+| R-15 | Fragment reassembly of torn photos | 6 | research |
+| R-16 | Find a cleaner copy in library before generative fill | 6 | research |
+| R-17 | Batch digitization overview (detections, failures, quality warnings, review before save) | 4 | todo |
+
+### Fix (separate feature)
+
+| ID | Feature | Phase | Status |
+|---|---|---|---|
 | R-06 | Damage repair — conservative (tears, cracks, folds, scratches, dust, stains) | 3 | implemented |
 | R-07 | Damage repair — generative reconstruction (flagged as invented detail) | 4 | todo |
 | R-08 | Manual damage painting + editable auto-detected damage mask | 3 | implemented |
 | R-09 | Color restoration: fade, WB, contrast, cast removal, yellowing (with "preserve character" option) | 4 | implemented |
 | R-10 | Colorize B&W | 4 | todo |
 | R-11 | Scan improvements: deskew, uneven lighting, glare, reflections, curvature, moiré, dust (built: perspective/deskew, scene-measured lighting, glare reduction, dust; not yet: curvature, moiré) | 4 | implemented |
-| R-12 | Multi-exposure scan fusion | 6 | research |
-| R-13 | Negatives (incl. orange mask) and slides | 6 | todo |
-| R-14 | Front/back pairing + OCR/handwriting extraction (never auto-verified) | 4 | todo |
-| R-15 | Fragment reassembly of torn photos | 6 | research |
-| R-16 | Find a cleaner copy in library before generative fill | 6 | research |
-| R-18 | Multi-shot glare removal (2+ photos of the same page from different angles, merged — PhotoScan-style). Recommended next: single-photo glare removal is fundamentally limited | 3 | todo |
-| R-19 | Automatic print orientation (detect sideways/upside-down prints; today: per-photo and "rotate all" buttons) | 3 | research |
-| R-17 | Batch digitization overview (detections, failures, quality warnings, review before save) | 4 | todo |
+| R-18 | Multi-shot glare removal (2+ photos of the same page from different angles, merged — PhotoScan-style); single-photo glare removal is fundamentally limited | 3 | todo |
+| R-20 | **Fix a photo** as a standalone tool for any library photo (hosts the same Fix panel) | 4 | todo |
 
 ## D — Smart Cleanup
 
