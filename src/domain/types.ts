@@ -57,6 +57,23 @@ export interface LibraryItem {
   baseUrl: string;
   /** Location Google Photos shows for the item, if any. */
   location: GeoPoint | null;
+  /** False for items in the library that belong to someone else (partner sharing). */
+  editable?: boolean;
+}
+
+/** What a bulk read returns for an item. */
+export interface ItemFileInfo {
+  mediaKey: string;
+  fileName: string | null;
+  takenAtMs: number;
+  timezoneOffsetMs: number;
+}
+
+/** A capture date to write on an item. */
+export interface DateChange {
+  dedupKey: string;
+  takenAtMs: number;
+  timezoneOffsetMs: number;
 }
 
 /** A page of a paged listing; `next` is null on the last page. */

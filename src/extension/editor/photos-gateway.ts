@@ -6,7 +6,7 @@
  * keeps working and an account switch fails loudly instead of touching the wrong library.
  */
 
-import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
+import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page, DateChange, ItemFileInfo } from "../../domain/types.js";
 import { Base64 } from "../../shared/codec.js";
 import { Messenger, type PageToContent, type ReplyMap } from "../messaging/protocol.js";
 
@@ -31,6 +31,14 @@ export class PhotosGateway {
 
   getItemDetails(mediaKey: string): Promise<ItemDetails> {
     return this.call({ type: "photos.getItemDetails", mediaKey });
+  }
+
+  readItemInfo(mediaKeys: string[]): Promise<ItemFileInfo[]> {
+    return this.call({ type: "photos.readItemInfo", mediaKeys });
+  }
+
+  async setDates(changes: DateChange[]): Promise<void> {
+    await this.call({ type: "photos.setDates", changes });
   }
 
   async downloadOriginal(mediaKey: string): Promise<Blob> {

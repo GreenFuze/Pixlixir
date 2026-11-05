@@ -41,6 +41,9 @@ export const ErrorCode = {
   JobNotFound: "JOB_NOT_FOUND",
   StorageFailed: "STORAGE_FAILED",
 
+  // Dates
+  DateNotApplied: "DATE_NOT_APPLIED",
+
   // Generic
   Cancelled: "CANCELLED",
   Internal: "INTERNAL",

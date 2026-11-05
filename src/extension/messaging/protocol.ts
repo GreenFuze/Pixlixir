@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
+import type { AlbumRef, CreatedMediaItem, ItemDetails, ItemFileInfo, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
@@ -53,6 +53,8 @@ export const PageToBackground = z.discriminatedUnion("type", [
   z.object({ type: z.literal("panel.openTool"), tool: ToolSchema, tabId: z.number().int(), mediaKeys: MediaKeysSchema }),
   z.object({ type: z.literal("photos.resolveTab"), email: z.string(), preferredTabId: z.number().int().nullable() }),
   z.object({ type: z.literal("panel.openScan"), tabId: z.number().int(), mediaKeys: ScanSelectionSchema }),
+  z.object({ type: z.literal("panel.openSettings"), tabId: z.number().int() }),
+  z.object({ type: z.literal("panel.accounts") }),
 ]);
 export type PageToBackground = z.infer<typeof PageToBackground>;
 
@@ -73,6 +75,12 @@ export const PageToContent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("photos.listAlbums"), expectedEmail: z.string(), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.listAlbumItems"), expectedEmail: z.string(), albumKey: z.string().min(10), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.getItemDetails"), expectedEmail: z.string(), mediaKey: z.string().min(10) }),
+  z.object({ type: z.literal("photos.readItemInfo"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(500) }),
+  z.object({
+    type: z.literal("photos.setDates"),
+    expectedEmail: z.string(),
+    changes: z.array(z.object({ dedupKey: z.string().min(10), takenAtMs: z.number(), timezoneOffsetMs: z.number() })).min(1).max(500),
+  }),
   z.object({ type: z.literal("photos.thumbnail"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000), maxSide: z.number().int().min(64).max(2048) }),
   z.object({ type: z.literal("photos.addToAlbum"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(50), album: AlbumRefSchema }),
   z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
@@ -112,10 +120,14 @@ export interface ReplyMap {
   "photos.listAlbums": Page<AlbumRef>;
   "photos.listAlbumItems": Page<LibraryItem>;
   "photos.getItemDetails": ItemDetails;
+  "photos.readItemInfo": ItemFileInfo[];
+  "photos.setDates": null;
   "photos.thumbnail": { bytesBase64: string; mimeType: string };
   "photos.addToAlbum": null;
   "photos.setDescription": null;
   "panel.openScan": null;
+  "panel.openSettings": null;
+  "panel.accounts": { emails: string[] };
   "modal.open": null;
   "modal.minimize": null;
   "modal.close": null;

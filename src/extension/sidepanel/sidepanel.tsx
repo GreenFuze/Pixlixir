@@ -9,7 +9,7 @@ import { JobStore, type PixJob } from "../storage/job-store.js";
 import { SCAN_HINT, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 /** Actions shown for context but not yet built — labelled honestly. */
-const PLANNED = ["Fix a photo (restore, lighting, colour)", "Edit with AI", "Find duplicates", "Fix date & location", "HDR / focus stacking"];
+const PLANNED = ["Fix a photo (restore, lighting, colour)", "Edit with AI", "Find duplicates", "Fix location", "HDR / focus stacking"];
 
 class PanelModel {
   async load(): Promise<{ state: PanelState; jobs: PixJob[] }> {
@@ -81,9 +81,21 @@ function App(props: { model: PanelModel }) {
     }
   };
 
+  const openSettings = async () => {
+    try {
+      if (tab?.account) await Messenger.toBackground({ type: "panel.openSettings", tabId: tab.tabId });
+      else await chrome.runtime.openOptionsPage();
+    } catch (err) {
+      setError((err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Could not open settings")).toJSON());
+    }
+  };
+
   return (
     <div class="panel">
-      <header><span class="logo">✦</span> <strong>Pixlixir</strong></header>
+      <header>
+        <span class="logo">✦</span> <strong>Pixlixir</strong>
+        <button class="btn icon small settings-btn" title="Settings" aria-label="Settings" onClick={() => void openSettings()}>⚙</button>
+      </header>
 
       {error && <div class="error-box" role="alert">{error.message} <code>{error.code}</code></div>}
 
@@ -139,6 +151,14 @@ function App(props: { model: PanelModel }) {
                   <li key={j.id}>
                     <div>Panorama of {j.sourceMediaKeys.length} photos{j.batchId ? <span class="muted small"> · from a scan</span> : null}</div>
                     <div class="muted small">{j.saved ? <a href={j.saved.webUrl} target="_blank" rel="noreferrer">open ↗</a> : "not saved"} · {status}</div>
+                  </li>
+                );
+              }
+              if (j.kind === "dateFix") {
+                return (
+                  <li key={j.id}>
+                    <div>Dates fixed</div>
+                    <div class="muted small">{j.changes.filter((c) => c.applied).length}/{j.changes.length} · {status}</div>
                   </li>
                 );
               }

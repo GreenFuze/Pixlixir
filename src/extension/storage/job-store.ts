@@ -71,7 +71,31 @@ export interface PanoramaJob {
   updatedAt: number;
 }
 
-export type PixJob = SplitJob | PanoramaJob;
+/** One planned date change, kept so it can be undone. */
+export interface DateFixRecord {
+  mediaKey: string;
+  dedupKey: string;
+  fileName: string;
+  oldTakenAtMs: number;
+  newTakenAtMs: number;
+  timezoneOffsetMs: number;
+  applied: boolean;
+}
+
+/** A run of date fixes. Written before the first change, so the old dates can never be lost. */
+export interface DateFixJob {
+  id: string;
+  kind: "dateFix";
+  accountEmail: string;
+  sourceMediaKey: string;
+  changes: DateFixRecord[];
+  status: "saving" | "done" | "partial" | "failed" | "undone";
+  error: SerializedError | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PixJob = SplitJob | PanoramaJob | DateFixJob;
 
 interface PixDb extends DBSchema {
   jobs: { key: string; value: PixJob; indexes: { bySource: [string, string]; byUpdated: number } };

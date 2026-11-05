@@ -25,7 +25,8 @@ export const TOOL_IDS = Object.keys(TOOLS) as ToolId[];
 
 /** The library scan (finds work for tools across a date range, an album, a selection or the whole library). */
 export const SCAN_PAGE = "scan.html";
-export const SCAN_HINT = "Find groups of overlapping photos to turn into panoramas.";
+export const SCAN_HINT = "Find panoramas and wrong dates in your library.";
+export const SETTINGS_PAGE = "settings.html";
 /** chrome.storage.session key prefix for a selection handed to a scan. */
 export const SCAN_SELECTION_PREFIX = "pixlixir.scanSelection.";
 

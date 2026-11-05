@@ -18,10 +18,11 @@ photos, ICE-style), saved right back into your library next to the originals.
 | **Fix** (separate feature, hosted by Split for now): colour restore (or keep original tones), lighting & shadow correction measured from the surface around the prints, glare reduction (auto hotspots + Glare brush), dust & scratches, Repair brush, Protect brush, sharpen, before/after | ✅ built — local processing; a standalone "Fix a photo" tool is planned |
 | **Create panorama**: select 2–40 overlapping photos → automatic alignment, projections (spherical, cylindrical, perspective, Panini, …), horizon straightening, exposure compensation, seamless blending, crop or fill edges, "flat surface" mode for posters/documents, save at full resolution (≤ 60 MP) | ✅ built — OpenCV + OpenStitching running locally (ADR-0005); verified in a sandbox, awaiting your test |
 | **Scan library** for panoramas, in a modal over Google Photos with live progress: date range, album, selection or whole library → groups of overlapping photos with previews → create the ones you pick in bulk. Each panorama gets the first photo's date and EXIF, the photos' location and description, and lands in the same albums | ✅ built — verified in a sandbox; library/album/description calls verified live; awaiting your test |
+| **Wrong dates** from file names, in the same scan: review old and new dates, fix in place, read back, undo. **Settings** holds the formats you know (`IMG-yyyymmdd.*`), per account | ✅ built; bulk date writes not yet checked on a real library |
 | Download results locally | ✅ built |
 | Standalone Fix, AI Studio, duplicates, metadata repair, HDR/focus stacking, video, vault, agent API | 🗺️ planned — see [FEATURES.md](docs/roadmap/FEATURES.md) |
 
-Originals are never modified. Nothing is deleted. All processing runs locally in your browser.
+Photo files are never modified: results are saved as new items, and **Wrong dates** changes only an item's date, after you confirm. Nothing is deleted. All processing runs locally in your browser.
 
 ## Install (developer mode)
 
@@ -33,7 +34,7 @@ npm run build
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
 choose the `dist/` folder. Open https://photos.google.com and look for the **✦ Pixlixir**
 chip in the bottom-right corner. Step-by-step tests: [Split](docs/testing/MANUAL-TEST-split.md) ·
-[Panorama](docs/testing/MANUAL-TEST-panorama.md) · [Scan library](docs/testing/MANUAL-TEST-scan.md).
+[Panorama](docs/testing/MANUAL-TEST-panorama.md) · [Scan library](docs/testing/MANUAL-TEST-scan.md) · [Wrong dates](docs/testing/MANUAL-TEST-dates.md).
 
 The first build downloads the panorama engine (Pyodide, OpenCV, OpenStitching — ~26 MB,
 pinned and sha256-verified, ~27 MB with Pillow for EXIF) into `vendor/` and ships it inside `dist/`.

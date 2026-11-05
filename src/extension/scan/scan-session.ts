@@ -7,6 +7,8 @@
  */
 
 import type { AlbumRef, LibraryItem } from "../../domain/types.js";
+import { DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../scan/date-fix.js";
+import { FilenameFormats } from "../../scan/filename-format.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
 import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js";
 import { PanoramaDetector, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
@@ -19,9 +21,12 @@ import { EditorSession } from "../editor/editor-session.js";
 import { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
 import { PanoramaSession } from "../editor/panorama/panorama-session.js";
 import { PhotosGateway } from "../editor/photos-gateway.js";
-import { JobStore, type PanoramaJob } from "../storage/job-store.js";
+import { Messenger } from "../messaging/protocol.js";
+import { FormatStore } from "../storage/format-store.js";
+import { JobStore, type DateFixJob, type PanoramaJob } from "../storage/job-store.js";
 import { ScanStore } from "../storage/scan-store.js";
 import { SCAN_SELECTION_PREFIX, type ScanHandover } from "../tools.js";
+
 import { PanoramaBulkCreator } from "./panorama-bulk-creator.js";
 import { EngineOverlapChecker } from "./engine-overlap-checker.js";
 
@@ -46,11 +51,19 @@ export interface CandidateView {
   error: SerializedError | null;
 }
 
+export interface DateFixView {
+  finding: DateFixFinding;
+  selected: boolean;
+  fixed: boolean;
+  thumbUrl: string | null;
+}
+
 export type ScanPhase =
   | { name: "setup" }
   | { name: "scanning"; step: string; done: number | null; total: number | null; secondsLeft: number | null }
   | { name: "review" }
   | { name: "creating"; done: number; total: number }
+  | { name: "fixingDates"; done: number; total: number }
   | { name: "failed"; error: SerializedError };
 
 export interface ScanSnapshot {
@@ -76,12 +89,20 @@ export interface ScanSnapshot {
   progress: string | null;
   /** Asking whether to stop running work before closing. */
   confirmingClose: boolean;
+  dateFixes: DateFixView[];
+  /** How many date rows are listed (the rest behind "Show more"). */
+  dateFixesShown: number;
+  dateFixError: SerializedError | null;
+  /** A run that can be undone. */
+  undoableDateFix: boolean;
   /** One group open in the Create-panorama editor, inside this modal. */
   editor: { candidateId: string; session: PanoramaSession } | null;
 }
 
 export class ScanSession extends EditorSession<ScanSnapshot> {
   static readonly THUMB_SIDE = 160;
+  static readonly DATE_ROWS_PER_PAGE = 100;
+  static readonly DATE_THUMB_SIDE = 96;
 
   readonly #gateway: PhotosGateway;
   readonly #worker: PanoramaWorkerClient;
@@ -91,6 +112,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   #stopCreating = false;
   #nextKey = 1;
   #lastActivity: string | null = null;
+  #dateJob: DateFixJob | null = null;
 
   constructor(params: ScanParams) {
     const today = new Date();
@@ -104,7 +126,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       albumKey: params.albumKey,
       albums: { status: "idle", items: [], error: null },
       selection: [],
-      detectors: { panorama: true },
+      detectors: { panorama: true, dates: true },
       recheck: false,
       summary: null,
       scopeLabel: "",
@@ -113,6 +135,10 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       thumbs: {},
       progress: null,
       confirmingClose: false,
+      dateFixes: [],
+      dateFixesShown: ScanSession.DATE_ROWS_PER_PAGE,
+      dateFixError: null,
+      undoableDateFix: false,
       editor: null,
     });
     this.#gateway = new PhotosGateway(params.email, params.tabId);
@@ -216,36 +242,40 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   async startScan(): Promise<void> {
     // Paragraph: fresh state, chosen detectors.
     this.revokeAll();
-    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null });
+    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null, ...ScanSession.noDateFixes() });
+    this.#dateJob = null;
     const ctrl = new AbortController();
     this.#scan = ctrl;
     try {
       const scope = ScanScopes.validate(this.scope());
       this.set({ scopeLabel: ScanScopes.describe(scope) });
-      if (!this.snapshot.detectors.panorama) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
-      const saved = await this.store().savedPanoramas(this.snapshot.params.email);
-      const checker = new EngineOverlapChecker(this.#gateway, this.#worker, () => this.#nextKey++, (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
-      const cache = this.results().cache<SavedSequence>(this.snapshot.params.email, "panorama");
-      const detectors: ScanDetector[] = [new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items), cache, this.snapshot.recheck) as ScanDetector];
+      const detectors = await this.chosenDetectors();
+      if (detectors.length === 0) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
 
       // Paragraph: run; findings appear as they are found.
       this.set({ phase: { name: "scanning", step: "Starting", done: null, total: null, secondsLeft: null } });
-      const eta = new ScanEta();
+      let eta = new ScanEta();
+      let etaStep = "";
       const scanner = new LibraryScanner(new LibraryCatalog(this.#gateway), detectors);
       const summary = await scanner.run(scope, {
         signal: ctrl.signal,
         progress: (step, done, total) => {
           const counted = done !== undefined && total !== undefined;
+          if (step !== etaStep) {
+            eta = new ScanEta();
+            etaStep = step;
+          }
           this.set({ phase: { name: "scanning", step, done: done ?? null, total: total ?? null, secondsLeft: counted ? eta.update(done, total, Date.now()) : null } });
           this.reportActivity(counted && total > 0 ? `Scanning ${Math.floor((done / total) * 100)}%` : "Scanning…");
         },
-      }, (finding) => this.addCandidate(finding as PanoramaCandidate));
+      }, (finding) => (finding.detector === "dates" ? this.addDateFix(finding as DateFixFinding) : this.addCandidate(finding as PanoramaCandidate)));
       this.set({ phase: { name: "review" }, summary, progress: null });
       this.reportActivity("Scan results");
+      void this.loadDateThumbs();
     } catch (err) {
       const e = EditorSession.toError(err, "The scan failed");
       // A stopped scan keeps what it found so far.
-      const found = this.snapshot.candidates.length > 0;
+      const found = this.snapshot.candidates.length > 0 || this.snapshot.dateFixes.length > 0;
       this.set({ phase: found ? { name: "review" } : { name: "setup" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
       this.reportActivity(found ? "Scan results" : null);
     } finally {
@@ -257,9 +287,27 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     this.#scan?.abort();
   }
 
+  /** Cheap checks first, so their findings appear before the stitching engine starts. */
+  private async chosenDetectors(): Promise<ScanDetector[]> {
+    const { params, detectors: chosen, recheck } = this.snapshot;
+    const detectors: ScanDetector[] = [];
+    if (chosen.dates) {
+      const formats = new FilenameFormats(await new FormatStore(params.email).load());
+      detectors.push(new FilenameDateDetector(this.#gateway, formats, this.results().cache<string>(params.email, "dates")) as ScanDetector);
+    }
+    if (chosen.panorama) {
+      const saved = await this.store().savedPanoramas(params.email);
+      const checker = new EngineOverlapChecker(this.#gateway, this.#worker, () => this.#nextKey++, (blob) => CanvasCodec.thumbnail(blob, ScanSession.THUMB_SIDE));
+      const cache = this.results().cache<SavedSequence>(params.email, "panorama");
+      detectors.push(new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items), cache, recheck) as ScanDetector);
+    }
+    return detectors;
+  }
+
   newScan(): void {
     this.revokeAll();
-    this.set({ phase: { name: "setup" }, candidates: [], thumbs: {}, summary: null, scanError: null });
+    this.#dateJob = null;
+    this.set({ phase: { name: "setup" }, candidates: [], thumbs: {}, summary: null, scanError: null, ...ScanSession.noDateFixes() });
     this.reportActivity(null);
   }
 
@@ -273,7 +321,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   /** Closes right away unless work is running, which needs a confirmation first. */
   requestClose(): void {
-    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating";
+    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating" || this.snapshot.phase.name === "fixingDates";
     if (running) this.set({ confirmingClose: true });
     else this.close();
   }
@@ -336,6 +384,129 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     }
     editor.session.dispose();
     this.set({ editor: null });
+  }
+
+  // ---- wrong dates ---------------------------------------------------------------------
+
+  /** Opens this account's filename formats in a tab. The next scan uses them. */
+  async openSettings(): Promise<void> {
+    try {
+      const { params } = this.snapshot;
+      await Messenger.toBackground({ type: "panel.openSettings", tabId: await this.photosTab(params.email, params.tabId) });
+    } catch (err) {
+      this.set({ scanError: EditorSession.failure(err) });
+    }
+  }
+
+  toggleDateFix(mediaKey: string): void {
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.finding.item.mediaKey === mediaKey && !d.fixed ? { ...d, selected: !d.selected } : d)) });
+  }
+
+  selectAllDateFixes(selected: boolean): void {
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.fixed ? d : { ...d, selected })) });
+  }
+
+  selectedDateFixes(): number {
+    return this.snapshot.dateFixes.filter((d) => d.selected && !d.fixed).length;
+  }
+
+  showMoreDateFixes(): void {
+    this.set({ dateFixesShown: this.snapshot.dateFixesShown + ScanSession.DATE_ROWS_PER_PAGE });
+    void this.loadDateThumbs();
+  }
+
+  /** Changes the ticked dates in place. The old dates are saved first, so the run can be undone. */
+  async fixSelectedDates(): Promise<void> {
+    // Paragraph: the record comes before the first change.
+    const views = this.snapshot.dateFixes.filter((d) => d.selected && !d.fixed);
+    if (views.length === 0) return;
+    const now = Date.now();
+    let job: DateFixJob = await this.store().put<DateFixJob>({
+      id: crypto.randomUUID(), kind: "dateFix", accountEmail: this.snapshot.params.email, sourceMediaKey: views[0]!.finding.item.mediaKey, status: "saving", error: null, createdAt: now, updatedAt: now,
+      changes: views.map(({ finding: f }) => ({ mediaKey: f.item.mediaKey, dedupKey: f.item.dedupKey, fileName: f.fileName, oldTakenAtMs: f.item.takenAtMs, newTakenAtMs: f.newTakenAtMs, timezoneOffsetMs: f.item.timezoneOffsetMs, applied: false })),
+    });
+    this.#dateJob = job;
+
+    // Paragraph: write and read back, batch by batch.
+    const planned: PlannedDate[] = job.changes.map((c) => ({ mediaKey: c.mediaKey, dedupKey: c.dedupKey, takenAtMs: c.newTakenAtMs, timezoneOffsetMs: c.timezoneOffsetMs }));
+    const applied = new Set<string>();
+    this.#stopCreating = false;
+    this.set({ dateFixError: null, phase: { name: "fixingDates", done: 0, total: planned.length } });
+    try {
+      await new DateFixApplier(this.#gateway).run(planned, () => this.#stopCreating, async (keys) => {
+        for (const k of keys) applied.add(k);
+        job = await this.store().put<DateFixJob>({ ...job, changes: job.changes.map((c) => (applied.has(c.mediaKey) ? { ...c, applied: true } : c)) });
+        this.#dateJob = job;
+        this.markDatesFixed(applied, true);
+        this.set({ phase: { name: "fixingDates", done: applied.size, total: planned.length } });
+        this.reportActivity(`Dates ${applied.size}/${planned.length}`);
+      });
+      job = await this.store().put<DateFixJob>({ ...job, status: applied.size === planned.length ? "done" : "partial" });
+    } catch (err) {
+      const e = EditorSession.toError(err, "Could not change the dates");
+      job = await this.store().put<DateFixJob>({ ...job, status: applied.size > 0 ? "partial" : "failed", error: e.toJSON() });
+      this.set({ dateFixError: e.toJSON() });
+    }
+    this.#dateJob = job;
+    this.set({ phase: { name: "review" }, undoableDateFix: applied.size > 0 });
+    this.reportActivity("Scan results");
+  }
+
+  /** Puts back the old dates of the last run. */
+  async undoDateFixes(): Promise<void> {
+    const original = this.#dateJob;
+    if (!original) return;
+    const done = original.changes.filter((c) => c.applied);
+    const planned: PlannedDate[] = done.map((c) => ({ mediaKey: c.mediaKey, dedupKey: c.dedupKey, takenAtMs: c.oldTakenAtMs, timezoneOffsetMs: c.timezoneOffsetMs }));
+    const restored = new Set<string>();
+    this.#stopCreating = false;
+    this.set({ dateFixError: null, phase: { name: "fixingDates", done: 0, total: planned.length } });
+    try {
+      await new DateFixApplier(this.#gateway).run(planned, () => false, (keys) => {
+        for (const k of keys) restored.add(k);
+        this.markDatesFixed(restored, false);
+        this.set({ phase: { name: "fixingDates", done: restored.size, total: planned.length } });
+      });
+      this.#dateJob = await this.store().put<DateFixJob>({ ...original, status: "undone", changes: original.changes.map((c) => ({ ...c, applied: false })) });
+      this.set({ undoableDateFix: false });
+    } catch (err) {
+      // Paragraph: what is still changed stays undoable.
+      const e = EditorSession.toError(err, "Could not put the dates back");
+      this.#dateJob = await this.store().put<DateFixJob>({ ...original, status: "partial", error: e.toJSON(), changes: original.changes.map((c) => (restored.has(c.mediaKey) ? { ...c, applied: false } : c)) });
+      this.set({ dateFixError: e.toJSON() });
+    }
+    this.set({ phase: { name: "review" } });
+  }
+
+  private addDateFix(finding: DateFixFinding): void {
+    this.set({ dateFixes: [...this.snapshot.dateFixes, { finding, selected: true, fixed: false, thumbUrl: null }] });
+  }
+
+  private markDatesFixed(mediaKeys: ReadonlySet<string>, fixed: boolean): void {
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (mediaKeys.has(d.finding.item.mediaKey) ? { ...d, fixed, selected: !fixed } : d)) });
+  }
+
+  /** Small images for the listed rows, a few at a time. A thumbnail that fails only leaves a blank. */
+  private async loadDateThumbs(): Promise<void> {
+    const { dateFixes, dateFixesShown } = this.snapshot;
+    const pending = dateFixes.slice(0, dateFixesShown).filter((d) => d.thumbUrl === null);
+    const next = pending[Symbol.iterator]();
+    const worker = async () => {
+      for (const d of next) {
+        try {
+          const blob = await this.#gateway.thumbnail(d.finding.item.baseUrl, ScanSession.DATE_THUMB_SIDE);
+          const url = URL.createObjectURL(blob);
+          this.set({ dateFixes: this.snapshot.dateFixes.map((x) => (x.finding.id === d.finding.id ? { ...x, thumbUrl: url } : x)) });
+        } catch (err) {
+          console.error("[pixlixir] could not load a thumbnail", err);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  }
+
+  private static noDateFixes(): Pick<ScanSnapshot, "dateFixes" | "dateFixesShown" | "dateFixError" | "undoableDateFix"> {
+    return { dateFixes: [], dateFixesShown: ScanSession.DATE_ROWS_PER_PAGE, dateFixError: null, undoableDateFix: false };
   }
 
   // ---- bulk creation -----------------------------------------------------------------
@@ -412,6 +583,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   private revokeAll(): void {
     for (const c of this.snapshot.candidates) URL.revokeObjectURL(c.previewUrl);
     for (const url of Object.values(this.snapshot.thumbs)) URL.revokeObjectURL(url);
+    for (const d of this.snapshot.dateFixes) if (d.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
   }
 
   /**

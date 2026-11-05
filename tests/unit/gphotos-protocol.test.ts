@@ -156,6 +156,50 @@ describe("ResumableUploader / LiveWebAdapter upload", () => {
   });
 });
 
+describe("bulk item info and date changes", () => {
+  const rpcs = (handlers: Record<string, unknown>) => fakeFetch((url) => {
+    const id = /rpcids=(\w+)/.exec(url)![1]!;
+    return new Response(envelope(id, handlers[id] ?? []));
+  });
+
+  it("reads file names and dates from EWgK9e (shape seen live 2026-11-05)", async () => {
+    const row = [KEY, [null, null, "", "IMG-20190512-WA0001.jpg", null, null, 1_700_000_000_000, 7_200_000, 12, 34], null, null, null, null];
+    const { fetch, calls } = rpcs({ EWgK9e: [[null, [row, [`${KEY}2`, [null, null, "", null, null, null, 5, null, 0], null, null, null, null]]]] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    expect(await adapter.readItemInfo([KEY, `${KEY}2`])).toEqual([
+      { mediaKey: KEY, fileName: "IMG-20190512-WA0001.jpg", takenAtMs: 1_700_000_000_000, timezoneOffsetMs: 7_200_000 },
+      { mediaKey: `${KEY}2`, fileName: null, takenAtMs: 5, timezoneOffsetMs: 0 },
+    ]);
+    const form = new URLSearchParams(String(calls[0]!.init.body));
+    const payload = JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string) as unknown[][][];
+    expect(payload[0]![0]).toEqual([[[KEY], [`${KEY}2`]]]);
+  });
+
+  it("fails loudly on an unknown EWgK9e shape", async () => {
+    const { fetch } = rpcs({ EWgK9e: [["unexpected"]] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    await expect(adapter.readItemInfo([KEY])).rejects.toBeInstanceOf(PixError);
+  });
+
+  it("writes dates through DaSgWe in seconds, by dedup key", async () => {
+    const { fetch, calls } = rpcs({ DaSgWe: [] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    await adapter.setDates([{ dedupKey: DEDUP, takenAtMs: 1_700_000_000_000, timezoneOffsetMs: 7_200_000 }]);
+    const form = new URLSearchParams(String(calls[0]!.init.body));
+    expect(JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string)).toEqual([[[DEDUP, 1_700_000_000, 7200]]]);
+  });
+
+  it("marks timeline items of someone else as not editable, but never album rows", async () => {
+    const row = (flags: unknown[]) => [KEY, ["https://x", 10, 10], 1, DEDUP, 0, 1, null, flags, 0, null, null, null, {}];
+    const { fetch } = rpcs({ lcxiM: [[row([[1], [2]]), row([[1], [27, false], [2]])], null], snAcKc: [null, [row([[27]])], null] });
+    const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);
+    const listed = await adapter.listLibrary({ page: null, startMs: null });
+    expect(listed.items.map((i) => i.editable)).toEqual([true, false]);
+    const album = await adapter.listAlbumItems(KEY, null);
+    expect(album.items.map((i) => i.editable)).toEqual([true]);
+  });
+});
+
 describe("URLs", () => {
   it("builds renditions and web urls", () => {
     expect(RenditionUrl.build("https://x/pw/A", { kind: "original" })).toBe("https://x/pw/A=d");

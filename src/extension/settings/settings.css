@@ -1,0 +1,17 @@
+/* Settings page. Shared chrome comes from base.css and editor.css. */
+body { background: var(--bg); overflow: auto; height: auto; }
+.settings { width: min(640px, 100%); margin-inline: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+.settings header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border: none; padding: 0; background: none; }
+.settings h1 { font-size: 18px; margin: 0; flex: 1; }
+.settings input:not([type="checkbox"]), .settings select { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 0; }
+.add-row { display: flex; align-items: center; gap: 10px; }
+.add-row input:not([type="checkbox"]) { flex: 1; font-family: ui-monospace, monospace; }
+.field-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.field-row input { flex: 1; font-family: ui-monospace, monospace; }
+.try-result { margin-block-start: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-block-end: 8px; }
+.formats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.formats li { display: flex; align-items: center; gap: 10px; padding-block: 6px; border-block-start: 1px solid var(--border); }
+.formats code { flex: 1; overflow-wrap: anywhere; }
+.opt { display: inline-flex; align-items: center; gap: 4px; }
+.err { color: var(--danger); margin-block-start: 6px; }

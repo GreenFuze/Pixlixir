@@ -40,7 +40,7 @@ export class LibraryScanner {
         findings++;
         emit(f);
       });
-      photosReused += stats.photosReused;
+      photosReused = Math.max(photosReused, stats.photosReused); // detectors look at the same photos: never count one twice
       failures.push(...stats.failures);
     }
     return { itemsListed: items.length, photos: items.filter((i) => i.type === "photo").length, findings, photosReused, failures, seconds: Math.round((Date.now() - started) / 100) / 10 };

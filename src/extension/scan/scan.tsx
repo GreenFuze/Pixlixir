@@ -54,6 +54,10 @@ function Setup(props: { session: ScanSession; snap: ScanSnapshot }) {
       <div class="group">
         <strong>Look for</strong>
         <label class="opt" title="Overlapping photos taken seconds apart. Each group is previewed before anything is created."><input type="checkbox" checked={snap.detectors.panorama} onChange={() => session.toggleDetector("panorama")} /> Panoramas</label>
+        <div class="row">
+          <label class="opt" title="Photos and videos whose date differs from the date in their file name"><input type="checkbox" checked={snap.detectors.dates} onChange={() => session.toggleDetector("dates")} /> Wrong dates</label>
+          <button class="btn small" title="The filename formats this account knows" onClick={() => void session.openSettings()}>Formats…</button>
+        </div>
         <label class="opt small" title="Scans reuse saved results and only check new photos. Tick this to check everything again."><input type="checkbox" checked={snap.recheck} onChange={() => session.toggleRecheck()} /> Re-check all</label>
       </div>
 
@@ -68,7 +72,7 @@ function Setup(props: { session: ScanSession; snap: ScanSnapshot }) {
 /** Bar + one status line for whichever stage is running. */
 function Progress(props: { snap: ScanSnapshot }) {
   const { phase, candidates, progress } = props.snap;
-  if (phase.name !== "scanning" && phase.name !== "creating") return null;
+  if (phase.name !== "scanning" && phase.name !== "creating" && phase.name !== "fixingDates") return null;
   const found = candidates.length;
   let text: string;
   let done: number | null;
@@ -77,6 +81,10 @@ function Progress(props: { snap: ScanSnapshot }) {
     done = phase.done;
     total = phase.total;
     text = `Creating ${Math.min(phase.done + 1, phase.total)} of ${phase.total}`;
+  } else if (phase.name === "fixingDates") {
+    done = phase.done;
+    total = phase.total;
+    text = `Changing dates: ${phase.done.toLocaleString()} of ${phase.total.toLocaleString()}`;
   } else {
     done = phase.done;
     total = phase.total;
@@ -138,6 +146,46 @@ function Candidate(props: { session: ScanSession; snap: ScanSnapshot; view: Cand
   );
 }
 
+function DateFixes(props: { session: ScanSession; snap: ScanSnapshot; onFix: () => void; onUndo: () => void }) {
+  const { session, snap, onFix, onUndo } = props;
+  const { dateFixes, dateFixesShown } = snap;
+  const fixing = snap.phase.name === "fixingDates";
+  const busy = fixing || snap.phase.name === "creating" || snap.phase.name === "scanning";
+  const fixed = dateFixes.filter((d) => d.fixed).length;
+  const selected = session.selectedDateFixes();
+  return (
+    <section class="card dates">
+      <div class="row between">
+        <strong title="The date in the file name differs from the date in Google Photos">{dateFixes.length.toLocaleString()} wrong date{dateFixes.length === 1 ? "" : "s"}{fixed > 0 ? `, ${fixed.toLocaleString()} fixed` : ""}</strong>
+        <div class="row">
+          <button class="btn small" disabled={busy} onClick={() => session.selectAllDateFixes(true)}>All</button>
+          <button class="btn small" disabled={busy} onClick={() => session.selectAllDateFixes(false)}>None</button>
+          {snap.undoableDateFix && <button class="btn small" disabled={busy} title="Put back the dates from before this run" onClick={onUndo}>Undo</button>}
+          <button class="btn primary small" disabled={busy || selected === 0} onClick={onFix}>Fix {selected.toLocaleString()}</button>
+        </div>
+      </div>
+      {snap.dateFixError && <ErrorBox error={snap.dateFixError} />}
+      <ul class="date-rows">
+        {dateFixes.slice(0, dateFixesShown).map((d) => {
+          const { item, fileName, mask, newTakenAtMs } = d.finding;
+          return (
+            <li key={d.finding.id} class={d.fixed ? "fixed" : ""}>
+              <input type="checkbox" aria-label={`Fix ${fileName}`} checked={d.selected} disabled={busy || d.fixed} onChange={() => session.toggleDateFix(item.mediaKey)} />
+              {d.thumbUrl ? <img src={d.thumbUrl} alt="" /> : <span class="ph" />}
+              <span class="date-name" title={`Format: ${mask}`}>{fileName}</span>
+              <span class="date-change">
+                <span class="muted">{PanoramaFormat.date(item.takenAtMs, item.timezoneOffsetMs)}</span> → <strong>{PanoramaFormat.date(newTakenAtMs, item.timezoneOffsetMs)}</strong>
+              </span>
+              {d.fixed && <span class="pill ok">Fixed</span>}
+            </li>
+          );
+        })}
+      </ul>
+      {dateFixes.length > dateFixesShown && <button class="btn small" onClick={() => session.showMoreDateFixes()}>Show more ({(dateFixes.length - dateFixesShown).toLocaleString()})</button>}
+    </section>
+  );
+}
+
 function Results(props: { snap: ScanSnapshot }) {
   const created = props.snap.candidates.filter((c) => c.status === "created");
   const failed = props.snap.candidates.filter((c) => c.status === "failed");
@@ -165,22 +213,25 @@ function App(props: { session: ScanSession }) {
   const { session } = props;
   const snap = useSnapshot(session);
   const [confirming, setConfirming] = useState(false);
+  const [confirmingDates, setConfirmingDates] = useState<"fix" | "undo" | null>(null);
   const { phase } = snap;
   const selected = session.selectedCount();
   const scanning = phase.name === "scanning";
   const creating = phase.name === "creating";
+  const fixingDates = phase.name === "fixingDates";
 
   // Paragraph: Escape closes the topmost thing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || snap.editor) return;
-      if (confirming) setConfirming(false);
+      if (confirmingDates) setConfirmingDates(null);
+      else if (confirming) setConfirming(false);
       else if (snap.confirmingClose) session.cancelClose();
       else session.requestClose();
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [confirming, snap.confirmingClose, phase.name, snap.editor]);
+  }, [confirming, confirmingDates, snap.confirmingClose, phase.name, snap.editor]);
 
   if (snap.editor) {
     return <PanoramaEditor key={snap.editor.candidateId} session={snap.editor.session} back={{ label: "← Back", title: "Back to the scan results", onBack: () => session.closeEditor(), escape: true }} />;
@@ -195,7 +246,7 @@ function App(props: { session: ScanSession }) {
         </div>
         <div class="row">
           <span class="pill" title="The scan reads this Google account">{snap.params.email}</span>
-          {(scanning || creating || phase.name === "review") && <button class="btn icon small" title="Minimize: keeps running, with progress on the Pixlixir chip" aria-label="Minimize" onClick={() => session.minimize()}>–</button>}
+          {(scanning || creating || fixingDates || phase.name === "review") && <button class="btn icon small" title="Minimize: keeps running, with progress on the Pixlixir chip" aria-label="Minimize" onClick={() => session.minimize()}>–</button>}
           <button class="btn icon small" title="Close" aria-label="Close" onClick={() => session.requestClose()}>✕</button>
         </div>
       </header>
@@ -211,10 +262,10 @@ function App(props: { session: ScanSession }) {
               <div class="row between">
                 <span>
                   <strong>{snap.scopeLabel}</strong>
-                  {snap.summary && <span class="muted small"> · {snap.summary.photos.toLocaleString()} photos · {snap.candidates.length} group{snap.candidates.length === 1 ? "" : "s"}</span>}
+                  {snap.summary && <span class="muted small"> · {snap.summary.photos.toLocaleString()} photos · {snap.detectors.panorama ? `${snap.candidates.length} group${snap.candidates.length === 1 ? "" : "s"}` : `${snap.dateFixes.length.toLocaleString()} wrong`}</span>}
                   {snap.summary && snap.summary.photosReused > 0 && <span class="muted small" title="Answered from saved results, without checking them again"> · {snap.summary.photosReused.toLocaleString()} already checked</span>}
                 </span>
-                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : !creating && <button class="btn small" onClick={() => session.newScan()}>New scan</button>}
+                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : fixingDates ? <button class="btn small" title="Stops after this batch" onClick={() => session.stopCreating()}>Stop</button> : !creating && <button class="btn small" onClick={() => session.newScan()}>New scan</button>}
               </div>
               <Progress snap={snap} />
               {snap.scanError && <ErrorBox error={snap.scanError} />}
@@ -224,12 +275,13 @@ function App(props: { session: ScanSession }) {
 
           <Results snap={snap} />
 
-          {phase.name !== "setup" && snap.candidates.length === 0 && !scanning && <div class="muted center-text">No panorama groups found.</div>}
+          {snap.dateFixes.length > 0 && <DateFixes session={session} snap={snap} onFix={() => setConfirmingDates("fix")} onUndo={() => setConfirmingDates("undo")} />}
+          {phase.name !== "setup" && snap.candidates.length === 0 && snap.dateFixes.length === 0 && !scanning && <div class="muted center-text">Nothing found.</div>}
           {snap.candidates.length > 0 && <ul class="cands">{snap.candidates.map((v) => <Candidate key={v.candidate.id} session={session} snap={snap} view={v} />)}</ul>}
         </div>
       )}
 
-      {snap.candidates.length > 0 && (phase.name === "review" || creating || scanning) && (
+      {snap.candidates.length > 0 && (phase.name === "review" || creating || scanning || fixingDates) && (
         <footer>
           <button class="btn small" disabled={creating} onClick={() => session.selectAll(true)}>All</button>
           <button class="btn small" disabled={creating} onClick={() => session.selectAll(false)}>None</button>
@@ -237,7 +289,7 @@ function App(props: { session: ScanSession }) {
           {creating ? (
             <button class="btn" onClick={() => session.stopCreating()}>Stop after this one</button>
           ) : (
-            <button class="btn primary" disabled={selected === 0 || scanning} onClick={() => setConfirming(true)}>Create {selected}</button>
+            <button class="btn primary" disabled={selected === 0 || scanning || fixingDates} onClick={() => setConfirming(true)}>Create {selected}</button>
           )}
         </footer>
       )}
@@ -260,11 +312,28 @@ function App(props: { session: ScanSession }) {
         </div>
       )}
 
+      {confirmingDates && (
+        <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dates-title">
+          <div class="modal card">
+            <h2 id="dates-title">{confirmingDates === "fix" ? `Change ${session.selectedDateFixes().toLocaleString()} date${session.selectedDateFixes() === 1 ? "" : "s"}?` : "Put the old dates back?"}</h2>
+            <p>
+              {confirmingDates === "fix"
+                ? <>These items change <strong>in place</strong> in <strong>{snap.params.email}</strong> and move in your timeline. Albums, sharing and edits stay. You can undo this run until you close or start a new scan.</>
+                : <>The items changed in this run go back to their earlier dates in <strong>{snap.params.email}</strong>.</>}
+            </p>
+            <div class="row end">
+              <button class="btn" autofocus onClick={() => setConfirmingDates(null)}>Cancel</button>
+              <button class="btn primary" onClick={() => { const action = confirmingDates; setConfirmingDates(null); void (action === "fix" ? session.fixSelectedDates() : session.undoDateFixes()); }}>{confirmingDates === "fix" ? "Change dates" : "Put back"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {snap.confirmingClose && (
         <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="close-title">
           <div class="modal card">
-            <h2 id="close-title">{creating ? "Stop creating panoramas?" : "Stop the scan?"}</h2>
-            <p>{creating ? "Panoramas already created stay in your library." : "What it found so far will be lost."}</p>
+            <h2 id="close-title">{creating ? "Stop creating panoramas?" : fixingDates ? "Stop changing dates?" : "Stop the scan?"}</h2>
+            <p>{creating ? "Panoramas already created stay in your library." : fixingDates ? "Dates already changed stay changed. Undo is lost once this closes." : "What it found so far will be lost."}</p>
             <div class="row end">
               <button class="btn" autofocus onClick={() => session.cancelClose()}>Keep going</button>
               <button class="btn" onClick={() => session.minimize()}>Minimize</button>

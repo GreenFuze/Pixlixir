@@ -263,7 +263,7 @@ describe("MetadataInheritance.derive", () => {
 describe("ListingParser (synthetic rows shaped like live lcxiM / Z5xsfc responses)", () => {
   it("parses items with location and video markers, and albums with titles", () => {
     const row = ["AF1QipROW000000001", ["https://lh3.googleusercontent.com/x", 4000, 3000, null, null, null, null, null, [null, null, 1], [1]], T0, "dedupROW0000000001", 3_600_000, T0, null, [[1]], 0, null, null, null, { "129168200": [[null, null, null, null, null, 1], [[515_000_000, -1_250_000], null, null, true, [], 1]] }];
-    expect(ListingParser.item("lcxiM", row)).toEqual({ mediaKey: "AF1QipROW000000001", baseUrl: "https://lh3.googleusercontent.com/x", width: 4000, height: 3000, takenAtMs: T0, dedupKey: "dedupROW0000000001", timezoneOffsetMs: 3_600_000, type: "photo", location: { latitude: 51.5, longitude: -0.125 } });
+    expect(ListingParser.item("lcxiM", row)).toEqual({ mediaKey: "AF1QipROW000000001", baseUrl: "https://lh3.googleusercontent.com/x", width: 4000, height: 3000, takenAtMs: T0, dedupKey: "dedupROW0000000001", timezoneOffsetMs: 3_600_000, type: "photo", location: { latitude: 51.5, longitude: -0.125 }, editable: true });
     const video = ["AF1QipROW000000002", ["https://lh3.googleusercontent.com/v", 1920, 1080], T0, "dedupROW0000000002", 0, { "76647426": [1000] }];
     expect(ListingParser.item("lcxiM", video)).toMatchObject({ type: "video", location: null });
     const album = ["AF1QipALBUMROW0001", ["https://lh3.googleusercontent.com/a", 1, 1], null, null, null, null, ["owner"], [[1]], { "72930366": [1, "Holiday", [], 12, null] }];

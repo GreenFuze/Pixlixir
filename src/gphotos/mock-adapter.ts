@@ -3,7 +3,7 @@
  * every created item's URL points at a mock:// scheme.
  */
 
-import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page, DateChange, ItemFileInfo } from "../domain/types.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
 import type { LibraryCursor, PhotosLibraryAdapter, UploadOptions } from "./adapter.js";
 
@@ -88,6 +88,18 @@ export class MockPhotosAdapter implements PhotosLibraryAdapter {
     const item = await this.getItem(mediaKey);
     const extra = this.details.get(mediaKey) ?? { description: "", albums: [], location: null, camera: null };
     return { mediaKey, dedupKey: item.dedupKey, ...extra };
+  }
+
+  async readItemInfo(mediaKeys: readonly string[]): Promise<ItemFileInfo[]> {
+    return [...this.#items.values()].filter((i) => mediaKeys.includes(i.ref.mediaKey)).map((i) => ({ mediaKey: i.ref.mediaKey, fileName: i.fileName, takenAtMs: i.takenAtMs, timezoneOffsetMs: i.timezoneOffsetMs }));
+  }
+
+  async setDates(changes: readonly DateChange[]): Promise<void> {
+    for (const change of changes) {
+      const item = [...this.#items.values()].find((i) => i.dedupKey === change.dedupKey);
+      if (!item) throw new PixError(ErrorCode.RpcEnvelopeMissing, "Mock item not found for a date change", { dedupKey: change.dedupKey });
+      this.#items.set(item.ref.mediaKey, { ...item, takenAtMs: change.takenAtMs, timezoneOffsetMs: change.timezoneOffsetMs });
+    }
   }
 
   async fetchThumbnail(baseUrl: string, _maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }> {

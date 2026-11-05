@@ -84,6 +84,11 @@ class ContentApp {
         return adapter.listAlbumItems(msg.albumKey, msg.page);
       case "photos.getItemDetails":
         return adapter.getItemDetails(msg.mediaKey);
+      case "photos.readItemInfo":
+        return adapter.readItemInfo(msg.mediaKeys);
+      case "photos.setDates":
+        await adapter.setDates(msg.changes);
+        return null;
       case "photos.thumbnail": {
         const { bytes, mimeType } = await adapter.fetchThumbnail(msg.baseUrl, msg.maxSide);
         return { bytesBase64: Base64.encode(bytes), mimeType };

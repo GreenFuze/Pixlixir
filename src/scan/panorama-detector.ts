@@ -12,7 +12,7 @@
 import type { LibraryItem } from "../domain/types.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
 import type { ScanCache } from "./scan-cache.js";
-import type { DetectorStats, ScanContext, ScanDetector, ScanFinding } from "./scan-detector.js";
+import { ScanFailures, type DetectorStats, type ScanContext, type ScanDetector, type ScanFinding } from "./scan-detector.js";
 
 export interface SequenceOptions {
   /** Largest gap between consecutive shots of one panorama. */
@@ -175,7 +175,7 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
         inARow = 0;
       } catch (err) {
         const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.StitchFailed, "Could not check a sequence of photos");
-        if (PanoramaDetector.stopsTheScan(e) || ++inARow >= PanoramaDetector.MAX_FAILURES_IN_A_ROW) throw e;
+        if (ScanFailures.stopsTheScan(e) || ++inARow >= PanoramaDetector.MAX_FAILURES_IN_A_ROW) throw e;
         stats.failures.push(e.toJSON());
       }
       stats.photosChecked += sequence.length;
@@ -218,10 +218,5 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
       preview: g.preview,
       thumbs: Object.fromEntries(Object.entries(g.thumbs).map(([d, blob]) => [key(d), blob])),
     }));
-  }
-
-  /** Problems that would hit every sequence, and the user stopping the scan. */
-  private static stopsTheScan(e: PixError): boolean {
-    return e.code === ErrorCode.Cancelled || e.code === ErrorCode.AccountMismatch || e.code === ErrorCode.TabNotBound || e.code === ErrorCode.SessionUnavailable || e.code === ErrorCode.RuntimeUnavailable || e.code === ErrorCode.StorageFailed;
   }
 }

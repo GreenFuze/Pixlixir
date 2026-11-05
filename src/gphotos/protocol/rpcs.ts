@@ -6,7 +6,7 @@
  * Nothing outside src/gphotos may reference RPC ids or indices.
  */
 
-import type { AlbumRef, GeoPoint, ItemDetails, LibraryItem, MediaType, Page } from "../../domain/types.js";
+import type { AlbumRef, GeoPoint, ItemDetails, LibraryItem, MediaType, Page, ItemFileInfo } from "../../domain/types.js";
 import type { BatchExecuteClient } from "./batchexecute.js";
 import { PositionalReader } from "./positional.js";
 
@@ -21,6 +21,7 @@ export const RpcId = {
   addToAlbum: "E1Cajb",
   addToSharedAlbum: "laUYf",
   setDescription: "AQNOFd",
+  bulkInfo: "EWgK9e",
 } as const;
 
 /** Ext-object key that marks video items (GPTK, observed in lcxiM/VrseUb). */
@@ -29,6 +30,12 @@ const VIDEO_EXT_KEY = "76647426";
 const GEO_EXT_KEY = "129168200";
 /** Ext-object key holding album metadata in album listings (live-verified 2026-11-05). */
 const ALBUM_EXT_KEY = "72930366";
+/**
+ * Timeline flag of items owned by someone else (partner sharing), from Photo Date Fixer. Not seen
+ * on the owner's library, and album listings set it on the owner's own albums, so it is read from
+ * timeline rows only; a date that cannot be written is caught by reading it back anyway.
+ */
+const NOT_OWNED_FLAG = 27;
 
 /**
  * Parsers shared by every listing RPC. Item rows (lcxiM, snAcKc) look like
@@ -48,7 +55,12 @@ export class ListingParser {
       timezoneOffsetMs: r.optionalNumber([4]) ?? 0,
       type: ext && VIDEO_EXT_KEY in ext ? "video" : "photo",
       location: ListingParser.geo(new PositionalReader(rpcId, ext).at([GEO_EXT_KEY, 1, 0])),
+      editable: rpcId !== RpcId.listLibrary || !ListingParser.hasFlag(r.at([7]), NOT_OWNED_FLAG),
     };
+  }
+
+  private static hasFlag(flags: unknown, flag: number): boolean {
+    return Array.isArray(flags) && flags.some((f) => Array.isArray(f) && f[0] === flag);
   }
 
   static album(rpcId: string, row: unknown): AlbumRef {
@@ -199,6 +211,16 @@ export class PhotosRpc {
       height: r.number([0, 0, 1, 1, 2], "height"),
       dedupKey: r.string([0, 0, 1, 3], "dedupKey"),
     };
+  }
+
+  /** EWgK9e — file name and dates of many items. Live-verified 2026-11-05 (200 library and 20 album keys, read-only). */
+  async getBulkInfo(mediaKeys: readonly string[]): Promise<ItemFileInfo[]> {
+    const fieldMask = [...new Array<null>(24).fill(null), [], ...new Array<null>(10).fill(null), []];
+    const data = await this.client.call(RpcId.bulkInfo, [[[mediaKeys.map((k) => [k])], [fieldMask]]]);
+    return new PositionalReader(RpcId.bulkInfo, data).array([0, 1], "rows").map((row) => {
+      const r = new PositionalReader(RpcId.bulkInfo, row);
+      return { mediaKey: r.string([0], "mediaKey"), fileName: r.optionalString([1, 3]), takenAtMs: r.number([1, 6], "takenAt"), timezoneOffsetMs: r.optionalNumber([1, 7]) ?? 0 };
+    });
   }
 
   /** DaSgWe — set capture time (seconds) and timezone offset (seconds) on owned items. */

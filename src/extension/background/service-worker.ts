@@ -7,7 +7,7 @@
 
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import { ContentToBackground, Messenger, PageToBackground, type PanelState, type TabState } from "../messaging/protocol.js";
-import { SCAN_PAGE, SCAN_SELECTION_PREFIX, TOOLS, type ScanHandover, type ToolId } from "../tools.js";
+import { SCAN_PAGE, SCAN_SELECTION_PREFIX, SETTINGS_PAGE, TOOLS, type ScanHandover, type ToolId } from "../tools.js";
 
 class TabRegistry {
   static readonly KEY = "pixlixir.tabs";
@@ -77,6 +77,11 @@ class BackgroundRouter {
           return this.resolveTab(msg.email, msg.preferredTabId);
         case "panel.openScan":
           return this.openScan(msg.tabId, msg.mediaKeys);
+        case "panel.openSettings":
+          await this.openPage(SETTINGS_PAGE, msg.tabId, { email: await this.boundEmail(msg.tabId) });
+          return null;
+        case "panel.accounts":
+          return { emails: [...new Set(Object.values(await this.tabs.all()).flatMap((t) => (t.account ? [t.account.email] : [])))] };
       }
     }
 

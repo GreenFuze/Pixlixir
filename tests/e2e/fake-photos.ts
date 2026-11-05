@@ -13,6 +13,8 @@ export interface FakePhoto {
   jpeg: Buffer;
   width: number;
   height: number;
+  /** As in Google's listings; defaults to a name with no date in it. */
+  fileName?: string;
 }
 
 export const FAKE_EMAIL = "e2e@example.com";
@@ -23,6 +25,7 @@ const ALBUM = "AF1QipFAKEALBUM00001";
 export class FakePhotos {
   readonly uploads: { fileName: string; bytes: Buffer }[] = [];
   readonly calls: { rpc: string; payload: unknown }[] = [];
+  readonly refuseDates = new Set<string>();
   #pending: { fileName: string } | null = null;
 
   constructor(private readonly photos: FakePhoto[]) {}
@@ -36,11 +39,11 @@ export class FakePhotos {
     return this.photos.find((p) => url.includes(`/fake/${p.mediaKey}`));
   }
 
-  /** Image downloads so far, to prove that later scans do not repeat them. */
+  /** Downloads for panorama detection so far, to prove that later scans do not repeat them. */
   renditions = 0;
 
   private async rendition(route: Route): Promise<void> {
-    this.renditions++;
+    if (route.request().url().includes("=w800-h800")) this.renditions++;
     const photo = this.byBase(route.request().url());
     if (!photo) return route.fulfill({ status: 404, headers: CORS });
     return route.fulfill({ status: 200, contentType: "image/jpeg", headers: CORS, body: photo.jpeg });
@@ -107,6 +110,21 @@ export class FakePhotos {
       }
       case "Z5xsfc":
         return [[[ALBUM, [], null, null, null, null, ["owner"], [[1]], { "72930366": [1, "Fake trip", [], 2, null] }]], null];
+      case "EWgK9e": {
+        // Shape from the live call (2026-11-05): rows of [key, [_, _, description, fileName, _, _, takenMs, offsetMs, ...]].
+        const keys = ((payload as unknown[][][][])[0]![0]![0] as unknown as string[][]).map((k) => k[0]!);
+        return [[null, keys.flatMap((k) => {
+          const p = this.photos.find((x) => x.mediaKey === k);
+          return p ? [[k, [null, null, "", p.fileName ?? `${k}.jpg`, null, null, p.takenAtMs, 7_200_000, 0], null, null, null, null]] : [];
+        })]];
+      }
+      case "DaSgWe":
+        // Like the live call, in seconds, by dedup key. A photo can be set to refuse, to test the read-back.
+        for (const [dedup, seconds] of (payload as [[string, number, number][]])[0]) {
+          const p = this.photos.find((x) => x.dedupKey === dedup);
+          if (p && !this.refuseDates.has(dedup)) p.takenAtMs = seconds * 1000;
+        }
+        return [];
       case "mdpdU":
         return [[[null, [`AF1QipUPLOADED${this.uploads.length}000`, ["https://photos.fife.usercontent.google.com/pw/fake/up", 100, 100], 0, `dedupUPLOADED${this.uploads.length}`]]]];
       default:

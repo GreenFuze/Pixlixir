@@ -6,7 +6,7 @@
  * web protocol; MockPhotosAdapter backs tests and offline UI development.
  */
 
-import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, DateChange, ItemDetails, ItemFileInfo, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
 
 export interface UploadOptions {
   /** If set, the created item's capture time is set to this (keeps it next to its source in the timeline). */
@@ -32,12 +32,17 @@ export interface PhotosLibraryAdapter {
   listAlbums(page: string | null): Promise<Page<AlbumRef>>;
   listAlbumItems(albumKey: string, page: string | null): Promise<Page<LibraryItem>>;
   getItemDetails(mediaKey: string): Promise<ItemDetails>;
+  /** File names and dates of many items in one call. */
+  readItemInfo(mediaKeys: readonly string[]): Promise<ItemFileInfo[]>;
   /** A resized JPEG of an item, from a base URL returned by a listing. */
   fetchThumbnail(baseUrl: string, maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }>;
 
   // ---- organising new items (never changes existing photos) ----
   addToAlbum(mediaKeys: readonly string[], album: AlbumRef): Promise<void>;
   setDescription(dedupKey: string, description: string): Promise<void>;
+
+  // ---- repairing metadata (changes existing items in place, only after the user confirms) ----
+  setDates(changes: readonly DateChange[]): Promise<void>;
 
   capabilities(): Capability[];
 }

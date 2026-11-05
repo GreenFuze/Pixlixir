@@ -5,9 +5,9 @@
  */
 
 import type { LibraryItem } from "../domain/types.js";
-import type { SerializedError } from "../shared/errors.js";
+import { ErrorCode, type PixError, type SerializedError } from "../shared/errors.js";
 
-export type DetectorId = "panorama";
+export type DetectorId = "panorama" | "dates";
 
 export interface ScanFinding {
   /** Stable within one scan. */
@@ -31,6 +31,14 @@ export interface DetectorStats {
   photosChecked: number;
   /** Parts that could not be analysed (the rest of the scan continued). */
   failures: SerializedError[];
+}
+
+export class ScanFailures {
+  /** Problems that would hit everything that follows, and the user stopping the scan. */
+  static stopsTheScan(e: PixError): boolean {
+    const stopping: ErrorCode[] = [ErrorCode.Cancelled, ErrorCode.AccountMismatch, ErrorCode.TabNotBound, ErrorCode.SessionUnavailable, ErrorCode.RuntimeUnavailable, ErrorCode.StorageFailed];
+    return stopping.includes(e.code);
+  }
 }
 
 export interface ScanDetector<F extends ScanFinding = ScanFinding> {

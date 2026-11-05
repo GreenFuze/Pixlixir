@@ -17,6 +17,7 @@ export const LIVE_CAPABILITIES: readonly Capability[] = [
   { id: "album.list", label: "List albums and album items", status: "live-verified", verifiedOn: "2026-11-05", notes: "Z5xsfc, snAcKc (album item keys differ from library keys; dedup keys match)." },
   { id: "library.upload", label: "Upload new item", status: "live-verified", verifiedOn: "2026-11-04", notes: "Resumable upload + mdpdU commit; verified with tools/live-probe (synthetic image, then trashed)." },
   { id: "item.setDate", label: "Set capture date", status: "live-verified", verifiedOn: "2026-11-04", notes: "DaSgWe (seconds); read back exactly via VrseUb in tools/live-probe." },
+  { id: "item.bulkInfo", label: "Read file names and dates in bulk", status: "live-verified", verifiedOn: "2026-11-05", notes: "EWgK9e: 2,567 library items, and album item keys (read-only)." },
   { id: "item.replaceInPlace", label: "Replace content in place", status: "research", verifiedOn: null, notes: "No evidence that the web app supports this." },
   { id: "album.add", label: "Add items to an album", status: "live-verified", verifiedOn: "2026-11-05", notes: "E1Cajb for own albums (synthetic probe). Shared albums use laUYf: implemented, not live-verified." },
   { id: "item.setDescription", label: "Set description", status: "live-verified", verifiedOn: "2026-11-05", notes: "AQNOFd, read back via fDcn4b (synthetic probe)." },

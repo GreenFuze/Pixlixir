@@ -37,6 +37,8 @@ describe("real extension", () => {
     await scratch.close();
     photos = shots.map((jpeg, i) => ({ mediaKey: `AF1QipFAKE${i}000000000`, dedupKey: `dedupFAKE${i}0000`, takenAtMs: T0 + i * 3000, jpeg, width: 800, height: 600 }));
     photos.push({ mediaKey: "AF1QipFAKELONE0000000", dedupKey: "dedupFAKELONE", takenAtMs: T0 + 86_400_000, jpeg: shots[0]!, width: 800, height: 600 });
+    photos.push({ mediaKey: "AF1QipFAKEWRONGDATE00", dedupKey: "dedupFAKEWRONGDATE", takenAtMs: T0 + 2 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "IMG-20190512-WA0001.jpg" });
+    photos.push({ mediaKey: "AF1QipFAKECUSTOM00000", dedupKey: "dedupFAKECUSTOM", takenAtMs: T0 + 3 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "HOLIDAY_12-05-2018_beach.jpg" });
     fake = new FakePhotos(photos);
     await fake.install(context);
   });
@@ -147,7 +149,7 @@ describe("real extension", () => {
     expect(await frame.locator(".cand").count()).toBe(1);
     expect(await frame.locator(".cand .strip img").count()).toBe(3);
     expect(await frame.locator(".cand-preview img").count()).toBe(1);
-    expect(await frame.locator(".status-bar").innerText()).toContain("3 already checked");
+    expect(await frame.locator(".status-bar").innerText()).toContain("6 already checked");
     expect(fake.renditions).toBe(before);
 
     // Paragraph: "Re-check all" downloads the thumbnails again.
@@ -175,6 +177,53 @@ describe("real extension", () => {
     await page.goto(`chrome-extension://${extensionId}/scan.html?tab=1&email=e2e@example.com&sel=other`);
     await page.waitForSelector(".error-box");
     expect(await page.locator(".error-box").innerText()).toContain("Start the scan from the Pixlixir menu");
+    await page.close();
+  });
+
+  it("keeps filename formats per account, and fixes, verifies and undoes wrong dates", async () => {
+    // Paragraph: a format added in Settings, for this account only.
+    const settings = await context.newPage();
+    await settings.goto(`chrome-extension://${extensionId}/settings.html?email=e2e@example.com`);
+    await settings.getByRole("textbox", { name: "New format" }).fill("HOLIDAY_dd-mm-yyyy_*.*");
+    await settings.getByRole("button", { name: "Add" }).click();
+    await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").waitFor();
+    await settings.reload();
+    await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").waitFor();
+    await settings.goto(`chrome-extension://${extensionId}/settings.html?email=second@example.com`);
+    await settings.getByText("*-yyyymmdd-WA*.*").waitFor();
+    expect(await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").count()).toBe(0);
+    await settings.close();
+
+    // Paragraph: only the date check, so no stitching. Both names are found, from different formats.
+    const { page, tabId } = await openPhotos();
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
+    const frame = await scanFrame(page);
+    await frame.getByRole("radio", { name: "Whole library" }).click();
+    await frame.getByRole("checkbox", { name: "Panoramas" }).uncheck();
+    await frame.getByRole("button", { name: "Scan", exact: true }).click();
+    await frame.locator(".date-rows li").nth(1).waitFor({ timeout: 60_000 });
+    await frame.getByRole("button", { name: "New scan" }).waitFor();
+    expect(await frame.locator(".date-rows li").count()).toBe(2);
+
+    // Paragraph: a date Google does not take stops the run and says so; the other was kept and is undoable.
+    const wa = photos.find((p) => p.fileName?.startsWith("IMG-"))!;
+    const custom = photos.find((p) => p.fileName?.startsWith("HOLIDAY"))!;
+    const [waBefore, customBefore] = [wa.takenAtMs, custom.takenAtMs];
+    fake.refuseDates.add(custom.dedupKey);
+    await frame.getByRole("button", { name: "Fix 2" }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Change dates" }).click();
+    await frame.locator(".dates .error-box").waitFor({ timeout: 30_000 });
+    expect(await frame.locator(".dates .error-box").innerText()).toContain("1 of 2 items did not get the new date");
+    expect(new Date(wa.takenAtMs + 7_200_000).toISOString().slice(0, 10)).toBe("2019-05-12");
+    expect(new Date(wa.takenAtMs + 7_200_000).toISOString().slice(11, 19)).toBe(new Date(waBefore + 7_200_000).toISOString().slice(11, 19)); // keeps the time of day
+    expect(custom.takenAtMs).toBe(customBefore);
+
+    // Paragraph: undo puts the changed one back.
+    fake.refuseDates.clear();
+    await frame.getByRole("button", { name: "Undo" }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Put back" }).click();
+    await expect.poll(() => wa.takenAtMs, { timeout: 30_000 }).toBe(waBefore);
+    await frame.getByRole("button", { name: "Close" }).click();
     await page.close();
   });
 

@@ -23,6 +23,8 @@ const statics = [
   ["src/extension/editor/panorama/panorama.css", "panorama.css"],
   ["src/extension/scan/scan.html", "scan.html"],
   ["src/extension/scan/scan.css", "scan.css"],
+  ["src/extension/settings/settings.html", "settings.html"],
+  ["src/extension/settings/settings.css", "settings.css"],
   ["LICENSE", "LICENSE"],
   ["NOTICE", "NOTICE"],
 ];
@@ -47,6 +49,7 @@ const contexts = await Promise.all([
       panorama: "src/extension/editor/panorama/panorama.tsx",
       "panorama-worker": "src/extension/editor/panorama/panorama-worker.ts",
       scan: "src/extension/scan/scan.tsx",
+      settings: "src/extension/settings/settings.tsx",
     },
     format: "esm",
     outdir: OUT,

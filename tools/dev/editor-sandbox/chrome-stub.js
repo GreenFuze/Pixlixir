@@ -35,6 +35,8 @@
   const PAGE = 5;
   const page = (all, token) => { const start = token ? Number(token) : 0; return { items: all.slice(start, start + PAGE), next: start + PAGE < all.length ? String(start + PAGE) : null }; };
 
+  const sandboxDates = new Map();
+
   async function thumbnail(file, side) {
     const blob = await (await fetch(file)).blob();
     const bmp = await createImageBitmap(blob);
@@ -76,6 +78,18 @@
       return ok({ bytesBase64: toBase64(await thumbnail(item.file, msg.maxSide)), mimeType: "image/jpeg" });
     }
 
+    // Paragraph: file names: the Budapest shots pretend to be WhatsApp photos of 2019 (wrong dates to review).
+    if (msg.type === "photos.readItemInfo") {
+      return ok(msg.mediaKeys.flatMap((k) => {
+        const item = byKey.get(k);
+        if (!item) return [];
+        const n = item.file.split("/").pop();
+        const changed = sandboxDates.get(item.dedupKey);
+        return [{ mediaKey: k, fileName: /budapest/.test(n) ? n.replace(/budapest(\d)\.jpg/, "IMG-20190512-WA000$1.jpg") : n, takenAtMs: changed?.takenAtMs ?? item.takenAtMs, timezoneOffsetMs: changed?.timezoneOffsetMs ?? item.timezoneOffsetMs }];
+      }));
+    }
+    if (msg.type === "photos.setDates") { for (const c of msg.changes) sandboxDates.set(c.dedupKey, c); return ok(null); }
+
     // Paragraph: writes go to in-page records only.
     if (msg.type === "photos.uploadPhoto") {
       await new Promise((r) => setTimeout(r, 400));
@@ -100,11 +114,13 @@
       sendMessage: async (msg) => {
         if (msg.type === "photos.resolveTab") return ok({ tabId: 1 });
         if (msg.type === "panel.openTool") { window.__sandboxOpenedTool = msg; return ok({ editorTabId: 2 }); }
+        if (msg.type === "panel.openSettings") { window.__sandboxOpenedSettings = msg; return ok(null); }
+        if (msg.type === "panel.accounts") return ok({ emails: ["dev@example.com", "second@example.com"] });
         return fail("NO_HANDLER", `sandbox: unhandled ${msg.type}`);
       },
       getURL: (p) => `/dist/${p}`,
     },
     tabs: { sendMessage: (_tabId, msg) => photos(msg) },
-    storage: { session: { get: async (k) => ({ [k]: session[k] }), set: async (o) => Object.assign(session, o), remove: async (k) => { delete session[k]; } } },
+    storage: { local: { get: async (k) => { const v = localStorage.getItem(k); return v === null ? {} : { [k]: JSON.parse(v) }; }, set: async (o) => { for (const [k, v] of Object.entries(o)) localStorage.setItem(k, JSON.stringify(v)); } }, session: { get: async (k) => ({ [k]: session[k] }), set: async (o) => Object.assign(session, o), remove: async (k) => { delete session[k]; } } },
   };
 })();

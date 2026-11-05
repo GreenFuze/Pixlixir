@@ -40,6 +40,7 @@ Live-verified on 2026-11-04 from page context: `VrseUb`, `fDcn4b`, `mdpdU`, `DaS
 | `VrseUb` | Item info | `[mediaKey, null, null, null, null]` | `[0][0]` mediaKey, `[0][1][0]` base URL, `[0][1][1..2]` w/h, `[0][2]` taken ms, `[0][3]` dedupKey, `[0][4]` tz ms | live-verified |
 | `fDcn4b` | Extended info (own items only) | `[mediaKey, 1, null, null, 1]` | `[0][2]` file name, `[0][5]` size bytes | live-verified |
 | `mdpdU` | Commit an upload | `[[[uploadToken, fileName, clientTimeMs, 2, 2]]]` | `[0][0][1]` = new item: `[0]` mediaKey, `[1][1..2]` w/h, `[3]` dedupKey | live-verified |
+| `EWgK9e` | File name and dates of many items | `[[[[[key], …]], [fieldMask]]]` | `[0][1]`: rows `[key, [_, _, description, fileName, _, _, takenMs, offsetMs, …]]`; takes library and album item keys | live-verified 2026-11-05 (read-only) |
 | `DaSgWe` | Set capture time | `[[[dedupKey, takenSec, tzSec]]]` | (none) — verified by reading back via `VrseUb` | live-verified |
 
 ## RPCs added for the library scan (2026-11-05)

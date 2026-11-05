@@ -3,7 +3,7 @@
  * Runs ONLY inside the Photos tab's content script (where the session tokens live).
  */
 
-import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page } from "../domain/types.js";
+import type { AccountRef, AlbumRef, Capability, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page, DateChange, ItemFileInfo } from "../domain/types.js";
 import { CONTENT_URL, itemWebUrl, RenditionUrl, type LibraryCursor, type PhotosLibraryAdapter, type UploadOptions } from "./adapter.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
 import { LIVE_CAPABILITIES } from "./capabilities.js";
@@ -98,6 +98,14 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
 
   getItemDetails(mediaKey: string): Promise<ItemDetails> {
     return this.#rpc.getItemDetails(mediaKey);
+  }
+
+  readItemInfo(mediaKeys: readonly string[]): Promise<ItemFileInfo[]> {
+    return this.#rpc.getBulkInfo(mediaKeys);
+  }
+
+  setDates(changes: readonly DateChange[]): Promise<void> {
+    return this.#rpc.setTimestamps(changes);
   }
 
   async fetchThumbnail(baseUrl: string, maxSide: number): Promise<{ bytes: Uint8Array; mimeType: string }> {
