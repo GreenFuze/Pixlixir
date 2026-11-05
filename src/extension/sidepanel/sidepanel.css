@@ -3,8 +3,22 @@
 .settings-btn { margin-inline-start: auto; }
 .logo { color: var(--accent); }
 .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-block-end: 6px; }
-.actions { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-block-start: 10px; }
 .small { font-size: 12px; }
-.planned ul, .caps ul, .jobs { margin: 6px 0 0; padding-inline-start: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.caps summary { cursor: pointer; }
+.jobs { margin: 6px 0 0; padding-inline-start: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .jobs li { border-block-start: 1px solid var(--border); padding-block-start: 6px; }
+.account { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px; }
+.tool-btn { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 6px; border: 1px solid var(--border); border-radius: 10px; font-size: 12px; text-align: center; }
+.tool-btn svg { width: 100%; max-width: 96px; height: auto; display: block; }
+.tool-btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.tool-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.tool-btn:disabled { opacity: .4; cursor: default; }
+.bulk { display: flex; flex-direction: column; gap: 8px; }
+.bulk .label { margin-block-end: 0; }
+.seg, .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.btn.on { background: var(--surface-2); border-color: var(--accent); font-weight: 600; }
+.dates-row { display: flex; align-items: center; gap: 4px; }
+.bulk input[type="date"], .bulk select { font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 0; flex: 1; }
+.look-for { display: flex; flex-direction: column; gap: 4px; padding-block-start: 8px; border-block-start: 1px solid var(--border); }
+.opt { display: inline-flex; align-items: center; gap: 6px; }
+.bulk-go { justify-content: flex-end; gap: 6px; }

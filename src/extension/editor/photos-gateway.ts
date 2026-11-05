@@ -8,7 +8,7 @@
 
 import type { AlbumRef, CreatedMediaItem, ItemDetails, LibraryItem, MediaItemInfo, Page, DateChange, ItemFileInfo } from "../../domain/types.js";
 import { Base64 } from "../../shared/codec.js";
-import { Messenger, type PageToContent, type ReplyMap } from "../messaging/protocol.js";
+import { Messenger, type PageToContent, type ReplyMap, type TabActivity } from "../messaging/protocol.js";
 
 type ContentRequest = PageToContent extends infer M ? (M extends { expectedEmail: string } ? Omit<M, "expectedEmail"> : never) : never;
 
@@ -88,9 +88,13 @@ export class PhotosGateway {
     await this.call({ type: "modal.minimize" });
   }
 
-  /** Short status shown on the Photos tab's chip (null clears it). */
-  async reportActivity(label: string | null): Promise<void> {
-    await this.call({ type: "modal.activity", label });
+  async restoreModal(): Promise<void> {
+    await this.call({ type: "modal.restore" });
+  }
+
+  /** Short status shown on the Photos tab's chip and in the panel (null clears it). */
+  async reportActivity(activity: TabActivity | null): Promise<void> {
+    await this.call({ type: "modal.activity", activity });
   }
 
   /** All albums of the account (follows every page). */

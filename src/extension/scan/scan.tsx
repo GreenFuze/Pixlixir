@@ -2,72 +2,10 @@
 
 import { useEffect, useState } from "preact/hooks";
 import { ScanEta } from "../../scan/scan-eta.js";
-import type { ScanScopeKind } from "../../scan/scan-scope.js";
-import { bootEditor, ErrorBox, Segmented, useSnapshot } from "../editor/editor-ui.js";
+import { bootEditor, ErrorBox, useSnapshot } from "../editor/editor-ui.js";
 import { PanoramaEditor } from "../editor/panorama/panorama-editor.js";
 import { PanoramaFormat } from "../editor/panorama/panorama-ui.js";
 import { ScanSession, type CandidateView, type ScanSnapshot } from "./scan-session.js";
-
-function Setup(props: { session: ScanSession; snap: ScanSnapshot }) {
-  const { session, snap } = props;
-  const scopes: { value: ScanScopeKind; label: string }[] = [
-    { value: "dateRange", label: "Date range" },
-    { value: "album", label: "Album" },
-    ...(snap.selection.length > 0 ? [{ value: "selection" as const, label: `Selected (${snap.selection.length})` }] : []),
-    { value: "library", label: "Whole library" },
-  ];
-  const now = new Date();
-  const presets: { label: string; from: Date; to: Date }[] = [
-    { label: "30 days", from: new Date(now.getTime() - 30 * 86_400_000), to: now },
-    { label: "12 months", from: new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()), to: now },
-    { label: "This year", from: new Date(now.getFullYear(), 0, 1), to: now },
-    { label: "Last year", from: new Date(now.getFullYear() - 1, 0, 1), to: new Date(now.getFullYear() - 1, 11, 31) },
-  ];
-
-  return (
-    <section class="card setup">
-      <div class="group">
-        <strong>Look through</strong>
-        <Segmented<ScanScopeKind> label="Scope" value={snap.scopeKind} disabled={false} options={scopes} onChange={(k) => session.setScopeKind(k)} />
-        {snap.scopeKind === "dateRange" && (
-          <>
-            <div class="row">
-              <label class="field inline">From <input type="date" value={snap.from} max={snap.to} onChange={(e) => session.setDates((e.target as HTMLInputElement).value, snap.to)} /></label>
-              <label class="field inline">To <input type="date" value={snap.to} min={snap.from} onChange={(e) => session.setDates(snap.from, (e.target as HTMLInputElement).value)} /></label>
-            </div>
-            <div class="row">{presets.map((p) => <button key={p.label} class="btn small" onClick={() => session.setDates(ScanSession.isoDate(p.from), ScanSession.isoDate(p.to))}>{p.label}</button>)}</div>
-          </>
-        )}
-        {snap.scopeKind === "album" && (
-          snap.albums.status === "loading" ? <div class="muted small">Loading albums…</div>
-          : snap.albums.status === "failed" && snap.albums.error ? <><ErrorBox error={snap.albums.error} /><button class="btn small" onClick={() => void session.loadAlbums()}>Try again</button></>
-          : (
-            <select value={snap.albumKey ?? ""} onChange={(e) => session.setAlbum((e.target as HTMLSelectElement).value)} aria-label="Album">
-              <option value="" disabled>Choose an album…</option>
-              {snap.params.albumKey && !snap.albums.items.some((a) => a.mediaKey === snap.params.albumKey) && <option value={snap.params.albumKey}>The album open in Google Photos</option>}
-              {snap.albums.items.map((a) => <option key={a.mediaKey} value={a.mediaKey}>{a.title}{a.shared ? " (shared)" : ""}</option>)}
-            </select>
-          )
-        )}
-      </div>
-
-      <div class="group">
-        <strong>Look for</strong>
-        <label class="opt" title="Overlapping photos taken seconds apart. Each group is previewed before anything is created."><input type="checkbox" checked={snap.detectors.panorama} onChange={() => session.toggleDetector("panorama")} /> Panoramas</label>
-        <div class="row">
-          <label class="opt" title="Photos and videos whose date differs from the date in their file name"><input type="checkbox" checked={snap.detectors.dates} onChange={() => session.toggleDetector("dates")} /> Wrong dates</label>
-          <button class="btn small" title="The filename formats this account knows" onClick={() => void session.openSettings()}>Formats…</button>
-        </div>
-        <label class="opt small" title="Scans reuse saved results and only check new photos. Tick this to check everything again."><input type="checkbox" checked={snap.recheck} onChange={() => session.toggleRecheck()} /> Re-check all</label>
-      </div>
-
-      {snap.scanError && <ErrorBox error={snap.scanError} />}
-      <div class="row end">
-        <button class="btn primary" onClick={() => void session.startScan()}>Scan</button>
-      </div>
-    </section>
-  );
-}
 
 /** Bar + one status line for whichever stage is running. */
 function Progress(props: { snap: ScanSnapshot }) {
@@ -242,7 +180,7 @@ function App(props: { session: ScanSession }) {
       <header>
         <div class="title">
           <span class="logo">✦</span>
-          <h1>Scan library</h1>
+          <h1>{snap.detectors.panorama || !snap.detectors.dates ? "Scan library" : "Fix dates"}</h1>
         </div>
         <div class="row">
           <span class="pill" title="The scan reads this Google account">{snap.params.email}</span>
@@ -255,28 +193,25 @@ function App(props: { session: ScanSession }) {
         <div class="center"><ErrorBox error={phase.error} /></div>
       ) : (
         <div class="scan-main">
-          {phase.name === "setup" && <Setup session={session} snap={snap} />}
-
-          {phase.name !== "setup" && (
-            <section class="card status-bar">
+          <section class="card status-bar">
               <div class="row between">
                 <span>
                   <strong>{snap.scopeLabel}</strong>
                   {snap.summary && <span class="muted small"> · {snap.summary.photos.toLocaleString()} photos · {snap.detectors.panorama ? `${snap.candidates.length} group${snap.candidates.length === 1 ? "" : "s"}` : `${snap.dateFixes.length.toLocaleString()} wrong`}</span>}
+                  {snap.summary && snap.summary.unmatchedNames > 0 && <span class="muted small" title="Add their format in Settings to include them"> · {snap.summary.unmatchedNames.toLocaleString()} name{snap.summary.unmatchedNames === 1 ? "" : "s"} match no format</span>}
                   {snap.summary && snap.summary.photosReused > 0 && <span class="muted small" title="Answered from saved results, without checking them again"> · {snap.summary.photosReused.toLocaleString()} already checked</span>}
                 </span>
-                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : fixingDates ? <button class="btn small" title="Stops after this batch" onClick={() => session.stopCreating()}>Stop</button> : !creating && <button class="btn small" onClick={() => session.newScan()}>New scan</button>}
+                {scanning ? <button class="btn small" onClick={() => session.stopScan()}>Stop</button> : fixingDates ? <button class="btn small" title="Stops after this batch" onClick={() => session.stopCreating()}>Stop</button> : !creating && <button class="btn small" title="Run this scan again" onClick={() => session.scanAgain()}>Scan again</button>}
               </div>
               <Progress snap={snap} />
               {snap.scanError && <ErrorBox error={snap.scanError} />}
               {snap.summary && snap.summary.failures.length > 0 && <div class="err" title={snap.summary.failures[0]!.message}>{snap.summary.failures.length} sequence{snap.summary.failures.length === 1 ? "" : "s"} could not be checked: {snap.summary.failures[0]!.message}</div>}
-            </section>
-          )}
+          </section>
 
           <Results snap={snap} />
 
           {snap.dateFixes.length > 0 && <DateFixes session={session} snap={snap} onFix={() => setConfirmingDates("fix")} onUndo={() => setConfirmingDates("undo")} />}
-          {phase.name !== "setup" && snap.candidates.length === 0 && snap.dateFixes.length === 0 && !scanning && <div class="muted center-text">Nothing found.</div>}
+          {snap.candidates.length === 0 && snap.dateFixes.length === 0 && !scanning && !snap.scanError && <div class="muted center-text">{snap.summary ? "Nothing found." : "Stopped."}</div>}
           {snap.candidates.length > 0 && <ul class="cands">{snap.candidates.map((v) => <Candidate key={v.candidate.id} session={session} snap={snap} view={v} />)}</ul>}
         </div>
       )}

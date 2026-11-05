@@ -1,9 +1,6 @@
 /* Library scan page. Shared chrome comes from editor.css. */
 .scan-main { flex: 1; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .scan-main > .card { width: min(1100px, 100%); margin-inline: auto; }
-.setup { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
-.setup .group { display: flex; flex-direction: column; gap: 6px; }
-.field.inline { display: inline-flex; align-items: center; gap: 6px; }
 .status-bar { display: flex; flex-direction: column; gap: 6px; }
 .progress-line { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .progress-line progress { flex: 1; max-width: 320px; }

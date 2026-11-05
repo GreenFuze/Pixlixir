@@ -8,7 +8,7 @@ You need 2–40 overlapping photos in your library, e.g. a landscape shot turnin
 (roughly ⅓ overlap between neighbours), or a poster/document photographed in parts.
 
 1. In the Google Photos grid, tick the photos (hover → checkmark). The chip badge shows the count.
-2. Chip → **Create panorama** (or side panel → **Create panorama**). A new tab opens bound to your account.
+2. Chip → **Panorama** icon (or the same icon in the side panel). A new tab opens bound to your account.
 3. Expect "Downloading photo N of M…", then a preview within a few seconds (first use starts the engine: +2–4 s).
 4. The photo list marks each photo **In panorama**, **Not connected** (no overlap found) or **Left out**.
 5. Try the settings; the preview updates after each change:

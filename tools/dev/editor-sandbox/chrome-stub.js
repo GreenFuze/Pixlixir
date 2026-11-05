@@ -106,7 +106,8 @@
 
   // Paragraph: session storage holds a pretend selection (all newspaper shots + the lone photo) under id "sandbox".
   const accountEmail = params.get("email");
-  const session = { "pixlixir.scanSelection.sandbox": { accountEmail, mediaKeys: library.filter((i) => /newspaper|prints/.test(i.file)).map((i) => i.mediaKey) }, "pixlixir.scanSelection.none": { accountEmail, mediaKeys: [] } };
+  const plan = (scope) => ({ accountEmail, plan: { scope, detectors: { panorama: true, dates: true }, recheck: false } });
+  const session = { "pixlixir.scanSelection.sandbox": plan({ kind: "selection", mediaKeys: library.filter((i) => /newspaper|prints/.test(i.file)).map((i) => i.mediaKey) }), "pixlixir.scanSelection.none": plan({ kind: "library" }) };
 
   window.chrome = {
     runtime: {

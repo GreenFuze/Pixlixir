@@ -129,7 +129,7 @@ offers a review and a bulk action. New checks are added as detectors.
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| L-01 | **Scan library**, a modal over Google Photos: scope = date range, album, selection or whole library; progress bar with time left, minimize to the chip; findings stream in; review, select, bulk action, results + recent work | 4 | implemented |
+| L-01 | **Bulk operations** in the side panel: scope = date range, album, selection or whole library, and what to look for. Runs in a modal over Google Photos: progress bar with time left, minimize to the chip; findings stream in; review, select, bulk action, results + recent work | 4 | implemented |
 | L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart that overlap partially, agree once aligned and show clearly more than one photo (bursts rejected); only groups and photos that stitch are shown; preview and in-modal editor per group; "already made" recognised | 4 | implemented |
 | L-03 | Detector: **wrong dates from file names** implemented (M-01); time zones and missing location (M-03) todo | 4 | partial |
 | L-04 | Detector: duplicates / near-duplicates (D section) | 4 | todo |
@@ -192,7 +192,7 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| M-01 | Detect wrong dates from file names, with **formats the user adds in Settings** (per account); review, fix in place, read back, undo. TZ errors, camera clock offset and missing timestamps todo | 4 | partial |
+| M-01 | Detect wrong dates from file names, with **formats the user adds in Settings** (per account), on selected items (**Fix dates**) or from Bulk operations; review, fix in place, read back, undo. TZ errors, camera clock offset and missing timestamps todo | 4 | partial |
 | M-02 | Bulk time shift with preview ("this camera is +3h") | 4 | todo |
 | M-03 | Geolocation inference (neighbors in time, trips, landmarks, GPX) with confidence + evidence | 4 | todo |
 | M-04 | Interactive map: approve/reject/move pin/apply to many/mark unknown | 4 | todo |

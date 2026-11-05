@@ -47,6 +47,12 @@ its photos: same date (the first photo's), location, metadata and albums.
 7. *Partial failure*: a sequence that cannot be checked is reported and skipped. Account and
    storage problems, or five failures in a row, stop the scan.
 
+**Where a scan starts.** The settings live in the side panel's *Bulk operations* card, and the
+modal opens already running, with a plan handed over through session storage. Results stay in the
+modal: a list of previews does not fit in a panel. **Fix dates** in the panel and the launcher is
+the same scan with a plan for the selected items. Running work, and a date run that can still be
+undone, are brought back rather than replaced by a new plan.
+
 **Telling panoramas from bursts.** The first version linked any confidently matching pair and
 showed 394 groups on the owner's library (2,567 items, 468 time sequences), nearly all bursts of
 a person moving. Measured on those sequences (2026-11-05, read-only, numbers only) and OpenCV's

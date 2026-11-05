@@ -31,6 +31,8 @@ export interface DetectorStats {
   photosChecked: number;
   /** Parts that could not be analysed (the rest of the scan continued). */
   failures: SerializedError[];
+  /** File names that match none of the account's formats. */
+  unmatchedNames?: number;
 }
 
 export class ScanFailures {

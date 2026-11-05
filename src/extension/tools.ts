@@ -4,11 +4,15 @@
  * and the editors themselves, so the rules live in one place.
  */
 
+import { ScanPlans, type ScanPlan } from "../scan/scan-plan.js";
+
 export type ToolId = "split" | "panorama";
 
 export interface ToolSpec {
   id: ToolId;
   label: string;
+  /** Caption under the tool's icon. */
+  short: string;
   page: string;
   minPhotos: number;
   maxPhotos: number;
@@ -17,23 +21,37 @@ export interface ToolSpec {
 }
 
 export const TOOLS: Record<ToolId, ToolSpec> = {
-  split: { id: "split", label: "Split into Photos", page: "split.html", minPhotos: 1, maxPhotos: 100, hint: "Select or open 1–100 scanned photos to split them into separate pictures." },
-  panorama: { id: "panorama", label: "Create panorama", page: "panorama.html", minPhotos: 2, maxPhotos: 40, hint: "Select 2–40 overlapping photos to stitch them into a panorama." },
+  split: { id: "split", label: "Split into Photos", short: "Split", page: "split.html", minPhotos: 1, maxPhotos: 100, hint: "Select or open 1–100 scanned photos to split them into separate pictures." },
+  panorama: { id: "panorama", label: "Create panorama", short: "Panorama", page: "panorama.html", minPhotos: 2, maxPhotos: 40, hint: "Select 2–40 overlapping photos to stitch them into a panorama." },
 };
 
 export const TOOL_IDS = Object.keys(TOOLS) as ToolId[];
 
 /** The library scan (finds work for tools across a date range, an album, a selection or the whole library). */
 export const SCAN_PAGE = "scan.html";
-export const SCAN_HINT = "Find panoramas and wrong dates in your library.";
 export const SETTINGS_PAGE = "settings.html";
-/** chrome.storage.session key prefix for a selection handed to a scan. */
+/** chrome.storage.session key prefix for a plan handed to a scan. */
 export const SCAN_SELECTION_PREFIX = "pixlixir.scanSelection.";
 
-/** What the service worker hands to a scan page: selected photos, bound to their account. */
+/** What the service worker hands to a scan page: what to do, bound to an account. */
 export interface ScanHandover {
   accountEmail: string;
-  mediaKeys: string[];
+  plan: ScanPlan;
+}
+
+/** The most items one scan accepts as a selection. */
+export const MAX_SCAN_SELECTION = 5000;
+
+/** Fix dates: photos and videos alike, run by the scan modal on what is selected. */
+export class FixDatesTool {
+  static readonly LABEL = "Fix dates from file names";
+  static readonly SHORT = "Fix dates";
+  static readonly HINT = "Select photos or videos to fix their dates from their file names.";
+
+  static plan(items: readonly { mediaKey: string }[]): ScanPlan | null {
+    if (items.length === 0 || items.length > MAX_SCAN_SELECTION) return null;
+    return ScanPlans.datesOf(items.map((i) => i.mediaKey));
+  }
 }
 
 export class ToolEligibility {

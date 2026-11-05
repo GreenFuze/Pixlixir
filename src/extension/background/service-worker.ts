@@ -53,7 +53,7 @@ class BackgroundRouter {
       const tabId = sender.tab!.id!;
       switch (msg.type) {
         case "tab.state":
-          await this.tabs.put({ tabId, account: msg.account, sessionError: msg.sessionError, selection: msg.selection, updatedAt: Date.now() });
+          await this.tabs.put({ tabId, account: msg.account, sessionError: msg.sessionError, selection: msg.selection, activity: msg.activity, updatedAt: Date.now() });
           return null;
         case "ui.openTool":
           return this.openTool(msg.tool, tabId, msg.mediaKeys);
@@ -61,7 +61,7 @@ class BackgroundRouter {
           await chrome.sidePanel.open({ tabId });
           return null;
         case "ui.openScan":
-          return this.openScan(tabId, msg.mediaKeys);
+          return this.openScan(tabId, msg.plan);
       }
     }
 
@@ -76,7 +76,7 @@ class BackgroundRouter {
         case "photos.resolveTab":
           return this.resolveTab(msg.email, msg.preferredTabId);
         case "panel.openScan":
-          return this.openScan(msg.tabId, msg.mediaKeys);
+          return this.openScan(msg.tabId, msg.plan);
         case "panel.openSettings":
           await this.openPage(SETTINGS_PAGE, msg.tabId, { email: await this.boundEmail(msg.tabId) });
           return null;
@@ -91,7 +91,8 @@ class BackgroundRouter {
   private async panelState(windowId: number): Promise<PanelState> {
     const [active] = await chrome.tabs.query({ active: true, windowId });
     const isPhotos = typeof active?.url === "string" && active.url.startsWith(`${Messenger.PHOTOS_ORIGIN}/`);
-    return { activeIsPhotos: isPhotos, activeTab: isPhotos && active?.id !== undefined ? await this.tabs.get(active.id) : null };
+    const albumKey = isPhotos ? (/\/album\/([A-Za-z0-9_-]{10,})/.exec(active?.url ?? "")?.[1] ?? null) : null;
+    return { activeIsPhotos: isPhotos, activeTab: isPhotos && active?.id !== undefined ? await this.tabs.get(active.id) : null, albumKey };
   }
 
   /** Opens an editor tool bound to the account currently signed in on that tab. */
@@ -105,20 +106,18 @@ class BackgroundRouter {
   }
 
   /**
-   * Opens the library scan as a modal over that Photos tab, bound to its account. The
-   * selection (possibly thousands of keys) is parked in session storage under a one-time id,
-   * which the scan page requires: scan.html is reachable from photos.google.com, so a frame
-   * not opened through here refuses to start. An album open in the tab preselects that album.
+   * Starts a scan in a modal over that Photos tab, bound to its account. The plan (possibly
+   * thousands of keys) is parked in session storage under a one-time id, which the scan page
+   * requires: scan.html is reachable from photos.google.com, so a frame not opened through
+   * here refuses to start. Work already running is brought back instead of replaced.
    */
-  private async openScan(tabId: number, mediaKeys: string[]): Promise<null> {
+  private async openScan(tabId: number, plan: ScanHandover["plan"]): Promise<null> {
     const email = await this.boundEmail(tabId);
-    const id = crypto.randomUUID();
-    await chrome.storage.session.set({ [SCAN_SELECTION_PREFIX + id]: { accountEmail: email, mediaKeys } satisfies ScanHandover });
-    const params: Record<string, string> = { tab: String(tabId), email, sel: id };
-    const album = /\/album\/([A-Za-z0-9_-]{10,})/.exec((await chrome.tabs.get(tabId)).url ?? "")?.[1];
-    if (album) params.album = album;
-    const url = chrome.runtime.getURL(`${SCAN_PAGE}?${new URLSearchParams(params).toString()}`);
-    await Messenger.toPhotosTab(tabId, { type: "modal.open", expectedEmail: email, url });
+    const key = SCAN_SELECTION_PREFIX + crypto.randomUUID();
+    await chrome.storage.session.set({ [key]: { accountEmail: email, plan } satisfies ScanHandover });
+    const url = chrome.runtime.getURL(`${SCAN_PAGE}?${new URLSearchParams({ tab: String(tabId), email, sel: key.slice(SCAN_SELECTION_PREFIX.length) }).toString()}`);
+    const { started } = await Messenger.toPhotosTab(tabId, { type: "modal.open", expectedEmail: email, url });
+    if (!started) await chrome.storage.session.remove(key);
     return null;
   }
 

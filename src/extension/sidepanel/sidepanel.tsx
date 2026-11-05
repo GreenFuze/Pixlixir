@@ -1,15 +1,23 @@
 /** Side panel: the contextual command center for the active Google Photos tab. */
 
-import { render } from "preact";
+import { h, render } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { LIVE_CAPABILITIES } from "../../gphotos/capabilities.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { Messenger, type PanelState } from "../messaging/protocol.js";
 import { JobStore, type PixJob } from "../storage/job-store.js";
-import { SCAN_HINT, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { FixDatesTool, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { TOOL_ICONS, ToolIcon, type ToolIconId } from "../ui/tool-icons.js";
+import { BulkOperations } from "./bulk-operations.js";
 
-/** Actions shown for context but not yet built — labelled honestly. */
-const PLANNED = ["Fix a photo (restore, lighting, colour)", "Edit with AI", "Find duplicates", "Fix location", "HDR / focus stacking"];
+/** A picture of what the tool does, with a one-word caption; the full name is the tooltip. */
+function ToolButton(props: { icon: ToolIconId; caption: string; title: string; disabled: boolean; onClick: () => void }) {
+  return (
+    <button class="tool-btn" title={props.title} aria-label={props.title} disabled={props.disabled} onClick={props.onClick}>
+      {h("svg", { viewBox: ToolIcon.VIEW_BOX, "aria-hidden": "true" }, TOOL_ICONS[props.icon].map((shape, i) => h(shape.tag, { key: i, ...shape.attrs })))}
+      <span>{props.caption}</span>
+    </button>
+  );
+}
 
 class PanelModel {
   async load(): Promise<{ state: PanelState; jobs: PixJob[] }> {
@@ -71,13 +79,13 @@ function App(props: { model: PanelModel }) {
     }
   };
 
-  const photoKeys = items.filter((i) => i.type !== "video").map((i) => i.mediaKey);
-  const openScan = async () => {
-    if (!tab) return;
+  const datesPlan = FixDatesTool.plan(items);
+  const fixDates = async () => {
+    if (!tab || !datesPlan) return;
     try {
-      await Messenger.toBackground({ type: "panel.openScan", tabId: tab.tabId, mediaKeys: photoKeys.length > 1 ? photoKeys : [] });
+      await Messenger.toBackground({ type: "panel.openScan", tabId: tab.tabId, plan: datesPlan });
     } catch (err) {
-      setError((err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Could not open the scan")).toJSON());
+      setError((err instanceof PixError ? err : PixError.wrap(err, ErrorCode.Internal, "Could not start fixing dates")).toJSON());
     }
   };
 
@@ -94,6 +102,7 @@ function App(props: { model: PanelModel }) {
     <div class="panel">
       <header>
         <span class="logo">✦</span> <strong>Pixlixir</strong>
+        {tab?.account && <span class="pill account" title={tab.account.authUserIndex > 0 ? `Google account /u/${tab.account.authUserIndex}` : "The Google account of this tab"}>{tab.account.email}</span>}
         <button class="btn icon small settings-btn" title="Settings" aria-label="Settings" onClick={() => void openSettings()}>⚙</button>
       </header>
 
@@ -107,36 +116,20 @@ function App(props: { model: PanelModel }) {
 
       {data?.state.activeIsPhotos && (
         <>
-          <section class="card">
-            <div class="label">Account</div>
-            {tab?.account ? (
-              <div><strong>{tab.account.email}</strong>{tab.account.authUserIndex > 0 && <span class="muted"> · /u/{tab.account.authUserIndex}</span>}</div>
-            ) : tab?.sessionError ? (
-              <div class="error-box">{tab.sessionError.message}</div>
-            ) : (
-              <div class="muted">Detecting… reload the Photos tab if this persists.</div>
-            )}
-          </section>
+          {tab?.sessionError && <div class="error-box">{tab.sessionError.message}</div>}
+          {!tab?.account && !tab?.sessionError && <div class="muted small" title="Reload the Photos tab if this persists">Detecting the account…</div>}
 
           <section class="card">
-            <div class="label">Selection</div>
-            <div>{items.length === 0 ? <span class="muted">Nothing selected</span> : `${items.length} item${items.length === 1 ? "" : "s"} selected`}</div>
-            {eligible.map(({ tool, keys }) => (
-              <div class="actions" key={tool}>
-                <button class="btn primary" title={keys ? undefined : TOOLS[tool].hint} disabled={!keys || !tab?.account} onClick={() => keys && void openTool(tool, keys)}>{TOOLS[tool].label}</button>
-              </div>
-            ))}
-          </section>
-
-          <section class="card">
-            <div class="actions">
-              <button class="btn" title={SCAN_HINT} disabled={!tab?.account} onClick={() => void openScan()}>{photoKeys.length > 1 ? `Scan ${photoKeys.length} selected…` : "Scan library…"}</button>
+            <div class="label">{items.length === 0 ? "Selected photos" : `${items.length} selected`}</div>
+            <div class="tools">
+              {eligible.map(({ tool, keys }) => (
+                <ToolButton key={tool} icon={tool} caption={TOOLS[tool].short} title={keys ? TOOLS[tool].label : TOOLS[tool].hint} disabled={!keys || !tab?.account} onClick={() => keys && void openTool(tool, keys)} />
+              ))}
+              <ToolButton icon="dates" caption={FixDatesTool.SHORT} title={datesPlan ? FixDatesTool.LABEL : FixDatesTool.HINT} disabled={!datesPlan || !tab?.account} onClick={() => void fixDates()} />
             </div>
-            <details class="planned">
-              <summary class="muted small">Planned actions</summary>
-              <ul>{PLANNED.map((p) => <li key={p} class="muted small">{p} — not available yet</li>)}</ul>
-            </details>
           </section>
+
+          {tab?.account && <BulkOperations key={tab.account.email} tabId={tab.tabId} email={tab.account.email} selection={items.map((i) => i.mediaKey)} albumKey={data.state.albumKey} activity={tab.activity ?? null} />}
         </>
       )}
 
@@ -173,15 +166,6 @@ function App(props: { model: PanelModel }) {
           </ul>
         </section>
       )}
-
-      <details class="card caps">
-        <summary class="label">What works today</summary>
-        <ul>
-          {LIVE_CAPABILITIES.map((c) => (
-            <li key={c.id}><span class={`pill ${c.status === "live-verified" ? "ok" : c.status === "blocked" ? "danger" : "warn"}`}>{c.status}</span> {c.label}</li>
-          ))}
-        </ul>
-      </details>
     </div>
   );
 }

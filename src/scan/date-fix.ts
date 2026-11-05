@@ -63,10 +63,12 @@ export class FilenameDateDetector implements ScanDetector<DateFixFinding> {
   ) {}
 
   async analyze(items: readonly LibraryItem[], ctx: ScanContext, emit: (finding: DateFixFinding) => void): Promise<DetectorStats> {
-    const stats: DetectorStats = { photosReused: 0, photosChecked: 0, failures: [] };
+    const stats: DetectorStats = { photosReused: 0, photosChecked: 0, failures: [], unmatchedNames: 0 };
+    let unmatched = 0;
     const editable = items.filter((i) => i.editable !== false);
     const inspect = (item: LibraryItem, fileName: string) => {
       const stamp = this.formats.parse(fileName);
+      if (!stamp) unmatched++;
       const target = stamp && DateCorrection.target(item, stamp);
       if (stamp && target !== null) emit({ id: `dates:${item.mediaKey}`, detector: "dates", mediaKeys: [item.mediaKey], item, fileName, mask: stamp.mask, newTakenAtMs: target });
     };
@@ -107,6 +109,7 @@ export class FilenameDateDetector implements ScanDetector<DateFixFinding> {
       }
       stats.photosChecked += batch.length;
     }
+    stats.unmatchedNames = unmatched;
     if (unreadable > 0) stats.failures.push(new PixError(ErrorCode.MediaFetchFailed, `${unreadable} file name${unreadable === 1 ? "" : "s"} could not be read`, { unreadable }).toJSON());
     return stats;
   }

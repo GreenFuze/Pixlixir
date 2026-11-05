@@ -4,13 +4,15 @@
  */
 
 import type { Selection } from "../../gphotos/dom/selection.js";
-import { SCAN_HINT, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import type { ScanPlan } from "../../scan/scan-plan.js";
+import { FixDatesTool, ToolEligibility, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { ToolIcon, type ToolIconId } from "../ui/tool-icons.js";
 
 export interface LauncherActions {
   openPanel(): void;
   openTool(tool: ToolId, mediaKeys: string[]): void;
-  /** Opens the library scan; selected photos (if any) become its default scope. */
-  openScan(mediaKeys: string[]): void;
+  /** Starts a scan in the modal. */
+  openScan(plan: ScanPlan): void;
   /** Brings back a minimized scan. */
   showActivity(): void;
 }
@@ -23,6 +25,9 @@ const STYLE = `
   .menu button { all: unset; cursor: pointer; padding: 9px 12px; border-radius: 8px; display: flex; justify-content: space-between; gap: 12px; }
   .menu button:hover:not([disabled]), .menu button:focus-visible { background: #3a2f63; }
   .menu button[disabled] { opacity: .45; cursor: default; }
+  .tools { display: flex; gap: 2px; }
+  .menu .tools button { flex-direction: column; align-items: center; gap: 3px; padding: 7px 6px; font-size: 11px; justify-content: flex-start; }
+  .tools svg { width: 84px; height: 35px; display: block; }
   .hint { font-size: 11px; opacity: .7; padding: 4px 12px 6px; max-width: 220px; }
   .activity { font-size: 12px; font-variant-numeric: tabular-nums; }
   .chip { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #7b4dff, #d24dff); box-shadow: 0 6px 20px rgba(123,77,255,.45); }
@@ -121,13 +126,23 @@ export class Launcher {
       p.textContent = this.#problem;
       this.#menu.append(p);
     }
+    const tools = this.doc.createElement("div");
+    tools.className = "tools";
+    this.#menu.append(tools);
     const eligible = TOOL_IDS.map((tool) => ({ tool, keys: ToolEligibility.mediaKeys(tool, items) }));
     for (const { tool, keys } of eligible) {
-      this.#menu.append(this.button(TOOLS[tool].label, keys === null || this.#problem !== null, () => keys && this.actions.openTool(tool, keys), keys === null ? TOOLS[tool].hint : undefined));
+      tools.append(this.toolButton(tool, TOOLS[tool].short, keys === null ? TOOLS[tool].hint : TOOLS[tool].label, keys === null || this.#problem !== null, () => keys && this.actions.openTool(tool, keys)));
     }
-    const photoKeys = items.filter((i) => i.type !== "video").map((i) => i.mediaKey);
-    this.#menu.append(this.button(photoKeys.length > 1 ? `Scan ${photoKeys.length} selected…` : "Scan library…", this.#problem !== null, () => this.actions.openScan(photoKeys.length > 1 ? photoKeys : []), SCAN_HINT));
-    this.#menu.append(this.button("Open Pixlixir panel", false, () => this.actions.openPanel()));
+    const datesPlan = FixDatesTool.plan(items);
+    tools.append(this.toolButton("dates", FixDatesTool.SHORT, datesPlan ? FixDatesTool.LABEL : FixDatesTool.HINT, datesPlan === null || this.#problem !== null, () => datesPlan && this.actions.openScan(datesPlan)));
+    this.#menu.append(this.button("Bulk operations", false, () => this.actions.openPanel(), "Scan by date, album or the whole library, in the side panel"));
+  }
+
+  private toolButton(icon: ToolIconId, caption: string, tooltip: string, disabled: boolean, onClick: () => void): HTMLButtonElement {
+    const b = this.button(caption, disabled, onClick, tooltip);
+    b.setAttribute("aria-label", tooltip);
+    b.prepend(ToolIcon.element(this.doc, icon));
+    return b;
   }
 
   private button(label: string, disabled: boolean, onClick: () => void, tooltip?: string): HTMLButtonElement {

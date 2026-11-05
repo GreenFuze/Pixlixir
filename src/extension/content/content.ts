@@ -12,7 +12,7 @@ import { LiveWebAdapter } from "../../gphotos/live-adapter.js";
 import { WizSessionReader } from "../../gphotos/protocol/session.js";
 import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
-import { Messenger, PageToContent, type ContentToBackground, type Envelope } from "../messaging/protocol.js";
+import { Messenger, PageToContent, type ContentToBackground, type Envelope, type TabActivity } from "../messaging/protocol.js";
 import { SCAN_PAGE } from "../tools.js";
 import { Launcher } from "./launcher.js";
 import { ToolModal } from "./tool-modal.js";
@@ -21,6 +21,7 @@ class ContentApp {
   #adapter: PhotosLibraryAdapter | null = null;
   #sessionError: PixError | null = null;
   #selection: Selection = { kind: "none" };
+  #activity: TabActivity | null = null;
   readonly #launcher: Launcher;
   readonly #modal = new ToolModal(document);
   readonly #observer: SelectionObserver;
@@ -29,7 +30,7 @@ class ContentApp {
     this.#launcher = new Launcher(document, {
       openPanel: () => void this.send({ type: "ui.openSidePanel" }),
       openTool: (tool, mediaKeys) => void this.send({ type: "ui.openTool", tool, mediaKeys }),
-      openScan: (mediaKeys) => void this.send({ type: "ui.openScan", mediaKeys }),
+      openScan: (plan) => void this.send({ type: "ui.openScan", plan }),
       showActivity: () => this.#modal.restore(),
     });
     this.#observer = new SelectionObserver(document, () => location.pathname, (sel) => {
@@ -102,19 +103,35 @@ class ContentApp {
       case "modal.open":
         // Only our own scan page may be framed here, whatever the message says.
         if (!msg.url.startsWith(chrome.runtime.getURL(SCAN_PAGE))) throw new PixError(ErrorCode.InvalidMessage, "Refused to open an unexpected page.");
+        // Paragraph: running work is brought back; finished results make way for the new scan.
+        if (this.#modal.isOpen && this.#activity?.busy) {
+          this.#modal.restore();
+          return { started: false };
+        }
+        this.#modal.close();
         this.#modal.open(msg.url);
-        return null;
+        this.setActivity({ label: "Starting", busy: true });
+        return { started: true };
       case "modal.minimize":
         this.#modal.minimize();
         return null;
+      case "modal.restore":
+        this.#modal.restore();
+        return null;
       case "modal.close":
         this.#modal.close();
-        this.#launcher.setActivity(null);
+        this.setActivity(null);
         return null;
       case "modal.activity":
-        this.#launcher.setActivity(msg.label);
+        this.setActivity(msg.activity);
         return null;
     }
+  }
+
+  private setActivity(activity: TabActivity | null): void {
+    this.#activity = activity;
+    this.#launcher.setActivity(activity?.label ?? null);
+    void this.publishState();
   }
 
   /** Account safety: refuse any operation addressed to a different account than this tab's. */
@@ -135,6 +152,7 @@ class ContentApp {
       account: this.#adapter?.account ?? null,
       sessionError: this.#sessionError?.toJSON() ?? null,
       selection: this.#selection,
+      activity: this.#activity,
     });
   }
 

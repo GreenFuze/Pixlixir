@@ -13,6 +13,7 @@ export interface ScanSummary {
   photos: number;
   findings: number;
   photosReused: number;
+  unmatchedNames: number;
   failures: SerializedError[];
   seconds: number;
 }
@@ -34,6 +35,7 @@ export class LibraryScanner {
     // Paragraph: each detector looks at the same items.
     let findings = 0;
     let photosReused = 0;
+    let unmatchedNames = 0;
     const failures: SerializedError[] = [];
     for (const detector of this.detectors) {
       const stats = await detector.analyze(items, ctx, (f) => {
@@ -41,8 +43,9 @@ export class LibraryScanner {
         emit(f);
       });
       photosReused = Math.max(photosReused, stats.photosReused); // detectors look at the same photos: never count one twice
+      unmatchedNames += stats.unmatchedNames ?? 0;
       failures.push(...stats.failures);
     }
-    return { itemsListed: items.length, photos: items.filter((i) => i.type === "photo").length, findings, photosReused, failures, seconds: Math.round((Date.now() - started) / 100) / 10 };
+    return { itemsListed: items.length, photos: items.filter((i) => i.type === "photo").length, findings, photosReused, unmatchedNames, failures, seconds: Math.round((Date.now() - started) / 100) / 10 };
   }
 }

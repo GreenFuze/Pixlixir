@@ -48,6 +48,9 @@ describe("real extension", () => {
     rmSync(profile, { recursive: true, force: true });
   });
 
+  const LIBRARY = { kind: "library" };
+  const panoramas = { panorama: true, dates: false };
+
   /** A Photos tab known to the service worker, and its tab id. */
   async function openPhotos(): Promise<{ page: Page; tabId: number }> {
     const page = await context.newPage();
@@ -71,7 +74,10 @@ describe("real extension", () => {
   async function asExtensionPage(message: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code: string; message: string } }> {
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-    const reply = await page.evaluate((m) => chrome.runtime.sendMessage(m), message);
+    const reply = await page.evaluate((m) => {
+      const { tabId, tabMessage } = m as { tabId?: number; tabMessage?: unknown };
+      return tabMessage ? chrome.tabs.sendMessage(tabId!, tabMessage) : chrome.runtime.sendMessage(m);
+    }, message);
     await page.close();
     return reply as { ok: boolean };
   }
@@ -91,23 +97,20 @@ describe("real extension", () => {
   it("scans in a modal over Photos, bulk creates, and keeps the photos' metadata", async () => {
     // Paragraph: open the scan the way the side panel does.
     const { page, tabId } = await openPhotos();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
     expect(page.url()).toBe("https://photos.google.com/"); // a modal, not a new tab
 
-    // Paragraph: scan the whole library: the 3-shot pan is found, the lone photo is not.
-    await frame.getByRole("radio", { name: "Whole library" }).click();
-    await frame.getByRole("button", { name: "Scan", exact: true }).click();
-    await frame.locator(".progress-line").first().waitFor();
+    // Paragraph: the 3-shot pan is found, the lone photo is not.
     await frame.locator(".cand").first().waitFor({ timeout: 120_000 });
-    await frame.getByRole("button", { name: "New scan" }).waitFor({ timeout: 60_000 });
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 60_000 });
     expect(await frame.locator(".cand").count()).toBe(1);
     expect(await frame.locator(".cand .strip img").count()).toBe(3);
     expect(await frame.locator(".error-box").count()).toBe(0);
 
-    // Paragraph: minimize keeps it alive; the chip's click (closed shadow root) is not reachable, so restore by reopening.
+    // Paragraph: minimize keeps it alive, and the panel's Show brings it back.
     await frame.getByRole("button", { name: "Minimize" }).click();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ tabId, tabMessage: { type: "modal.restore", expectedEmail: "e2e@example.com" } })).toMatchObject({ ok: true });
     expect(page.frames().filter((f) => f.url().includes("/scan.html"))).toHaveLength(1);
 
     // Paragraph: bulk create.
@@ -140,26 +143,28 @@ describe("real extension", () => {
   it("later scans reuse saved results unless asked to re-check", async () => {
     // Paragraph: the first test already scanned this library, so nothing is downloaded now.
     const { page, tabId } = await openPhotos();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
-    const frame = await scanFrame(page);
     const before = fake.renditions;
-    await frame.getByRole("radio", { name: "Whole library" }).click();
-    await frame.getByRole("button", { name: "Scan", exact: true }).click();
-    await frame.getByRole("button", { name: "New scan" }).waitFor({ timeout: 60_000 });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: true, dates: true }, recheck: false } })).toMatchObject({ ok: true });
+    const frame = await scanFrame(page);
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 60_000 });
     expect(await frame.locator(".cand").count()).toBe(1);
     expect(await frame.locator(".cand .strip img").count()).toBe(3);
     expect(await frame.locator(".cand-preview img").count()).toBe(1);
-    expect(await frame.locator(".status-bar").innerText()).toContain("6 already checked");
+    expect(await frame.locator(".status-bar").innerText()).toContain("already checked");
+    expect(await frame.locator(".status-bar").innerText()).toContain("names match no format");
     expect(fake.renditions).toBe(before);
 
-    // Paragraph: "Re-check all" downloads the thumbnails again.
-    await frame.getByRole("button", { name: "New scan" }).click();
-    await frame.getByRole("radio", { name: "Whole library" }).click();
-    await frame.getByLabel("Re-check all").check();
-    await frame.getByRole("button", { name: "Scan", exact: true }).click();
-    await frame.getByRole("button", { name: "New scan" }).waitFor({ timeout: 120_000 });
-    expect(fake.renditions).toBeGreaterThan(before);
-    await frame.getByRole("button", { name: "Close" }).click();
+    // Paragraph: finished results make way for a new plan, and "Re-check all" downloads the thumbnails again.
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: true } })).toMatchObject({ ok: true });
+    await expect.poll(() => fake.renditions, { timeout: 120_000 }).toBeGreaterThan(before);
+
+    // Paragraph: while it runs, another plan brings it back instead of replacing it.
+    const running = page.frames().find((f) => f.url().includes("/scan.html"))!;
+    const url = running.url();
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true }, recheck: false } })).toMatchObject({ ok: true });
+    expect(page.frames().find((f) => f.url().includes("/scan.html"))!.url()).toBe(url);
+    await running.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
+    await running.getByRole("button", { name: "Close" }).click();
     await page.close();
   });
 
@@ -172,7 +177,7 @@ describe("real extension", () => {
   });
 
   it("refuses a scan handed over for another account", async () => {
-    await sw.evaluate(() => chrome.storage.session.set({ "pixlixir.scanSelection.other": { accountEmail: "second@example.com", mediaKeys: [] } }));
+    await sw.evaluate(() => chrome.storage.session.set({ "pixlixir.scanSelection.other": { accountEmail: "second@example.com", plan: { scope: { kind: "library" }, detectors: { panorama: false, dates: true }, recheck: false } } }));
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/scan.html?tab=1&email=e2e@example.com&sel=other`);
     await page.waitForSelector(".error-box");
@@ -196,13 +201,10 @@ describe("real extension", () => {
 
     // Paragraph: only the date check, so no stitching. Both names are found, from different formats.
     const { page, tabId } = await openPhotos();
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true }, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
-    await frame.getByRole("radio", { name: "Whole library" }).click();
-    await frame.getByRole("checkbox", { name: "Panoramas" }).uncheck();
-    await frame.getByRole("button", { name: "Scan", exact: true }).click();
     await frame.locator(".date-rows li").nth(1).waitFor({ timeout: 60_000 });
-    await frame.getByRole("button", { name: "New scan" }).waitFor();
+    await frame.getByRole("button", { name: "Scan again" }).waitFor();
     expect(await frame.locator(".date-rows li").count()).toBe(2);
 
     // Paragraph: a date Google does not take stops the run and says so; the other was kept and is undoable.
@@ -224,6 +226,47 @@ describe("real extension", () => {
     await frame.locator(".modal").getByRole("button", { name: "Put back" }).click();
     await expect.poll(() => wa.takenAtMs, { timeout: 30_000 }).toBe(waBefore);
     await frame.getByRole("button", { name: "Close" }).click();
+    await page.close();
+  });
+
+  it("fixes the dates of selected photos, and scans from Bulk operations, from the side panel", async () => {
+    // Paragraph: the panel next to a Photos tab, with one photo ticked. Clicks reach a background tab.
+    const { page } = await openPhotos();
+    const panel = await context.newPage();
+    await panel.setViewportSize({ width: 360, height: 900 });
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    const fixDates = panel.getByRole("button", { name: "Fix dates from file names" });
+    await panel.getByRole("button", { name: "Select photos or videos to fix their dates from their file names." }).waitFor({ timeout: 15_000 });
+    expect(await panel.getByRole("button", { name: "Select 2–40 overlapping photos" }).isDisabled()).toBe(true);
+    await page.evaluate(() => document.querySelector('[data-key="AF1QipFAKEWRONGDATE00"]')!.setAttribute("aria-checked", "true"));
+    await fixDates.waitFor({ timeout: 15_000 });
+
+    // Paragraph: Fix dates goes straight to the review, for that photo only.
+    await fixDates.click();
+    const frame = await scanFrame(page);
+    await frame.locator(".date-rows li").first().waitFor({ timeout: 60_000 });
+    await frame.getByRole("button", { name: "Scan again" }).waitFor();
+    expect(await frame.locator(".date-rows li").count()).toBe(1);
+    expect(await frame.locator(".date-rows").innerText()).toContain("IMG-20190512-WA0001.jpg");
+    expect(await frame.locator(".cand").count()).toBe(0);
+    expect(await frame.locator("h1").innerText()).toBe("Fix dates");
+    // Mouse input does not reach a frame while the panel shares the window here; the other tests click it for real.
+    await frame.getByRole("button", { name: "Close" }).dispatchEvent("click");
+    await expect.poll(() => page.frames().some((f) => f.url().includes("/scan.html")), { timeout: 5000 }).toBe(false);
+    await page.evaluate(() => document.querySelector('[data-key="AF1QipFAKEWRONGDATE00"]')!.setAttribute("aria-checked", "false"));
+
+    // Paragraph: Bulk operations: the settings are in the panel, and Scan starts at once.
+    await panel.getByRole("radio", { name: "Whole library" }).click();
+    await panel.getByLabel("Panoramas").uncheck();
+    await panel.getByRole("button", { name: "Scan", exact: true }).click();
+    const bulk = await scanFrame(page);
+    await bulk.locator(".date-rows li").first().waitFor({ timeout: 60_000 });
+    await bulk.getByRole("button", { name: "Scan again" }).waitFor();
+    expect(await bulk.locator(".date-rows li").count()).toBeGreaterThan(0);
+    expect(await bulk.locator(".status-bar strong").innerText()).toBe("Your whole library");
+    await bulk.getByRole("button", { name: "Close" }).dispatchEvent("click");
+    await panel.close();
     await page.close();
   });
 
@@ -259,11 +302,9 @@ describe("real extension", () => {
     const { page, tabId } = await openPhotos();
     const uploadsBefore = fake.uploads.length;
     const pagesBefore = context.pages().length;
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, mediaKeys: [] })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
-    await frame.getByRole("radio", { name: "Whole library" }).click();
-    await frame.getByRole("button", { name: "Scan", exact: true }).click();
-    await frame.getByRole("button", { name: "New scan" }).waitFor({ timeout: 120_000 });
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
 
     // Paragraph: Edit stays in the modal, and Back returns without saving.
     await frame.getByRole("button", { name: "Edit…" }).click();

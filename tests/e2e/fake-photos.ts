@@ -80,8 +80,13 @@ export class FakePhotos {
       status: 200,
       contentType: "text/html",
       headers: { "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; frame-src 'none'" },
-      body: `<!doctype html><html><head><title>Fake Photos</title><script>window.WIZ_global_data = ${JSON.stringify(wiz)};</script></head><body><main>fake library</main></body></html>`,
+      body: `<!doctype html><html><head><title>Fake Photos</title><script>window.WIZ_global_data = ${JSON.stringify(wiz)};</script></head><body><main>${this.photos.map((p) => this.tile(p)).join("")}</main></body></html>`,
     });
+  }
+
+  /** A grid tile, marked up like the real one (src/gphotos/dom/selection.ts). */
+  private tile(p: FakePhoto): string {
+    return `<div><a href="/photo/${p.mediaKey}" aria-label="Photo"></a><div role="checkbox" aria-checked="false" data-key="${p.mediaKey}"></div></div>`;
   }
 
   private row(p: FakePhoto): unknown[] {

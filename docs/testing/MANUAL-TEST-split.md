@@ -4,10 +4,10 @@ Prereqs: `npm ci && npm run build`; Chrome → `chrome://extensions` → Develop
 **Load unpacked** → select `dist/`. Have a scan or photo of an album page in Google Photos.
 
 1. Open https://photos.google.com. Expect the **✦ Pixlixir** chip bottom-right.
-2. Click the toolbar icon: the side panel shows your account email.
+2. Click the toolbar icon: the side panel shows your account email at the top.
 3. Open or select one scanned photo, or select up to 100 for a bulk split. The chip badge shows the count.
    Bulk: a filmstrip lists the scans (badge = photos found); click one to review it; **Save N from M scans** saves them all.
-4. Chip → **Split into Photos** (or the panel button). A new tab opens with your account in the header.
+4. Chip → **Split** icon (or the same icon in the side panel). A new tab opens with your account in the header.
 5. Expect outlines around each print, numbered in reading order, with previews on the right.
 6. Drag a corner; move an outline; press Delete on a false detection; "+ Add" for a missed one; rotate a sideways print.
 7. Fix: on a card click **Fix…**. Expect a large preview with auto-fixes applied.

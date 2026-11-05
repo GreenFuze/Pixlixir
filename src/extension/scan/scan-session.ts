@@ -1,12 +1,12 @@
 /**
  * Library scan page controller (UI-framework independent).
  *
- * Setup (what to look through, what to look for) -> scan (list items once, run the chosen
- * detectors; findings stream in) -> review (tick findings) -> bulk action (create the
- * panoramas one by one) -> results stay on the page and in the side panel's recent work.
+ * Started with a plan from the side panel or the launcher: scan (list items once, run the chosen
+ * detectors; findings stream in) -> review (tick findings) -> bulk action -> results stay on
+ * the page and in the side panel's recent work.
  */
 
-import type { AlbumRef, LibraryItem } from "../../domain/types.js";
+import type { LibraryItem } from "../../domain/types.js";
 import { DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../scan/date-fix.js";
 import { FilenameFormats } from "../../scan/filename-format.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
@@ -14,14 +14,14 @@ import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js"
 import { PanoramaDetector, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
 import { ScanEta } from "../../scan/scan-eta.js";
 import type { DetectorId, ScanDetector } from "../../scan/scan-detector.js";
-import { ScanScopes, type ScanScope, type ScanScopeKind } from "../../scan/scan-scope.js";
+import type { ScanPlan } from "../../scan/scan-plan.js";
+import { ScanScopes } from "../../scan/scan-scope.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { CanvasCodec } from "../editor/canvas-codec.js";
 import { EditorSession } from "../editor/editor-session.js";
 import { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
 import { PanoramaSession } from "../editor/panorama/panorama-session.js";
 import { PhotosGateway } from "../editor/photos-gateway.js";
-import { Messenger } from "../messaging/protocol.js";
 import { FormatStore } from "../storage/format-store.js";
 import { JobStore, type DateFixJob, type PanoramaJob } from "../storage/job-store.js";
 import { ScanStore } from "../storage/scan-store.js";
@@ -33,10 +33,8 @@ import { EngineOverlapChecker } from "./engine-overlap-checker.js";
 export interface ScanParams {
   tabId: number;
   email: string;
-  /** One-time chrome.storage.session id set by the service worker; holds the handed-over selection. */
-  selectionId: string;
-  /** Album open in the Photos tab when the scan was started. */
-  albumKey: string | null;
+  /** One-time chrome.storage.session id set by the service worker; holds the plan. */
+  planId: string;
 }
 
 export type CandidateStatus = "found" | "queued" | "working" | "created" | "failed";
@@ -59,7 +57,6 @@ export interface DateFixView {
 }
 
 export type ScanPhase =
-  | { name: "setup" }
   | { name: "scanning"; step: string; done: number | null; total: number | null; secondsLeft: number | null }
   | { name: "review" }
   | { name: "creating"; done: number; total: number }
@@ -69,16 +66,8 @@ export type ScanPhase =
 export interface ScanSnapshot {
   params: ScanParams;
   phase: ScanPhase;
-  scopeKind: ScanScopeKind;
-  /** yyyy-mm-dd, local dates. */
-  from: string;
-  to: string;
-  albumKey: string | null;
-  albums: { status: "idle" | "loading" | "ready" | "failed"; items: AlbumRef[]; error: SerializedError | null };
-  selection: string[];
+  /** What this scan looks for. */
   detectors: Record<DetectorId, boolean>;
-  /** Ignore saved results and check every photo again. */
-  recheck: boolean;
   summary: ScanSummary | null;
   /** What the last scan looked through, in words. */
   scopeLabel: string;
@@ -113,21 +102,13 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   #nextKey = 1;
   #lastActivity: string | null = null;
   #dateJob: DateFixJob | null = null;
+  #plan: ScanPlan | null = null;
 
   constructor(params: ScanParams) {
-    const today = new Date();
-    const monthAgo = new Date(today.getTime() - 30 * 86_400_000);
     super({
       params,
-      phase: { name: "setup" },
-      scopeKind: params.albumKey ? "album" : "dateRange",
-      from: ScanSession.isoDate(monthAgo),
-      to: ScanSession.isoDate(today),
-      albumKey: params.albumKey,
-      albums: { status: "idle", items: [], error: null },
-      selection: [],
-      detectors: { panorama: true, dates: true },
-      recheck: false,
+      phase: { name: "scanning", step: "Starting", done: null, total: null, secondsLeft: null },
+      detectors: { panorama: false, dates: false },
       summary: null,
       scopeLabel: "",
       scanError: null,
@@ -149,11 +130,11 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const q = new URLSearchParams(search);
     const tabId = Number(q.get("tab"));
     const email = q.get("email") ?? "";
-    const selectionId = q.get("sel");
-    if (!Number.isInteger(tabId) || !email.includes("@") || !selectionId) {
-      throw new PixError(ErrorCode.InvalidMessage, "Start the scan from the Pixlixir menu in Google Photos.", { tabId, hasEmail: email.length > 0, hasSession: selectionId !== null });
+    const planId = q.get("sel");
+    if (!Number.isInteger(tabId) || !email.includes("@") || !planId) {
+      throw new PixError(ErrorCode.InvalidMessage, "Start the scan from the Pixlixir menu in Google Photos.", { tabId, hasEmail: email.length > 0, hasSession: planId !== null });
     }
-    return { tabId, email, selectionId, albumKey: q.get("album") };
+    return { tabId, email, planId };
   }
 
   dispose(): void {
@@ -165,76 +146,36 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     this.revokeAll();
   }
 
-  // ---- setup -------------------------------------------------------------------
+  // ---- start -------------------------------------------------------------------
 
   async init(): Promise<void> {
     try {
       // Paragraph: this page may only run when opened through the service worker (one-time id).
       this.#store = await JobStore.open();
       this.#results = await ScanStore.open();
-      const k = SCAN_SELECTION_PREFIX + this.snapshot.params.selectionId;
+      const k = SCAN_SELECTION_PREFIX + this.snapshot.params.planId;
       const handover = (await chrome.storage.session.get(k))[k] as ScanHandover | undefined;
       if (!handover || handover.accountEmail !== this.snapshot.params.email) throw new PixError(ErrorCode.InvalidMessage, "Start the scan from the Pixlixir menu in Google Photos.");
       await chrome.storage.session.remove(k);
-      const keys = handover.mediaKeys;
-
-      // Paragraph: a selection is the most specific scope; else a preselected album.
-      if (keys.length > 0) this.set({ selection: keys, scopeKind: "selection" });
-      if (this.snapshot.scopeKind === "album") await this.loadAlbums();
+      this.#plan = handover.plan;
+      this.set({ detectors: handover.plan.detectors });
     } catch (err) {
       this.fail(err);
+      this.reportActivity(null);
+      return;
     }
+    await this.startScan();
   }
 
-  setScopeKind(kind: ScanScopeKind): void {
-    this.set({ scopeKind: kind, scanError: null });
-    if (kind === "album" && this.snapshot.albums.status === "idle") void this.loadAlbums();
+  /** The same plan again. Saved results now count: "Re-check all" applies to the first run only. */
+  scanAgain(): void {
+    if (this.#plan) this.#plan = { ...this.#plan, recheck: false };
+    void this.startScan();
   }
 
-  setDates(from: string, to: string): void {
-    this.set({ from, to, scanError: null });
-  }
-
-  setAlbum(albumKey: string): void {
-    this.set({ albumKey, scanError: null });
-  }
-
-  toggleRecheck(): void {
-    this.set({ recheck: !this.snapshot.recheck });
-  }
-
-  toggleDetector(id: DetectorId): void {
-    this.set({ detectors: { ...this.snapshot.detectors, [id]: !this.snapshot.detectors[id] } });
-  }
-
-  async loadAlbums(): Promise<void> {
-    this.set({ albums: { status: "loading", items: [], error: null } });
-    try {
-      const items = await this.#gateway.allAlbums();
-      this.set({ albums: { status: "ready", items, error: null } });
-    } catch (err) {
-      this.set({ albums: { status: "failed", items: [], error: EditorSession.failure(err) } });
-    }
-  }
-
-  /** The scope as chosen in the form. */
-  scope(): ScanScope {
-    const s = this.snapshot;
-    switch (s.scopeKind) {
-      case "library":
-        return { kind: "library" };
-      case "selection":
-        return { kind: "selection", mediaKeys: s.selection };
-      case "album": {
-        const album = s.albums.items.find((a) => a.mediaKey === s.albumKey);
-        if (album) return { kind: "album", album };
-        // The album open in Google Photos may not be in the list (e.g. shared with you by someone else).
-        if (s.albumKey && s.albumKey === s.params.albumKey) return { kind: "album", album: { mediaKey: s.albumKey, title: "The album open in Google Photos", shared: false } };
-        throw new PixError(ErrorCode.InvalidMessage, "Choose an album to scan.");
-      }
-      case "dateRange":
-        return { kind: "dateRange", fromMs: ScanSession.localDayStart(s.from), toMs: ScanSession.localDayStart(s.to) + 86_400_000 - 1 };
-    }
+  private plan(): ScanPlan {
+    if (!this.#plan) throw new PixError(ErrorCode.Internal, "The scan has no plan");
+    return this.#plan;
   }
 
   // ---- scanning ----------------------------------------------------------------
@@ -247,7 +188,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const ctrl = new AbortController();
     this.#scan = ctrl;
     try {
-      const scope = ScanScopes.validate(this.scope());
+      const scope = ScanScopes.validate(this.plan().scope);
       this.set({ scopeLabel: ScanScopes.describe(scope) });
       const detectors = await this.chosenDetectors();
       if (detectors.length === 0) throw new PixError(ErrorCode.InvalidMessage, "Choose at least one thing to look for.");
@@ -276,8 +217,8 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       const e = EditorSession.toError(err, "The scan failed");
       // A stopped scan keeps what it found so far.
       const found = this.snapshot.candidates.length > 0 || this.snapshot.dateFixes.length > 0;
-      this.set({ phase: found ? { name: "review" } : { name: "setup" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
-      this.reportActivity(found ? "Scan results" : null);
+      this.set({ phase: { name: "review" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
+      this.reportActivity("Scan results");
     } finally {
       this.#scan = null;
     }
@@ -289,7 +230,8 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   /** Cheap checks first, so their findings appear before the stitching engine starts. */
   private async chosenDetectors(): Promise<ScanDetector[]> {
-    const { params, detectors: chosen, recheck } = this.snapshot;
+    const { params } = this.snapshot;
+    const { detectors: chosen, recheck } = this.plan();
     const detectors: ScanDetector[] = [];
     if (chosen.dates) {
       const formats = new FilenameFormats(await new FormatStore(params.email).load());
@@ -302,13 +244,6 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       detectors.push(new PanoramaDetector(checker, (items) => ScanSession.alreadyMade(saved, items), cache, recheck) as ScanDetector);
     }
     return detectors;
-  }
-
-  newScan(): void {
-    this.revokeAll();
-    this.#dateJob = null;
-    this.set({ phase: { name: "setup" }, candidates: [], thumbs: {}, summary: null, scanError: null, ...ScanSession.noDateFixes() });
-    this.reportActivity(null);
   }
 
   // ---- the modal -------------------------------------------------------------------
@@ -336,10 +271,17 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     void this.#gateway.closeModal().catch((e: unknown) => this.set({ confirmingClose: false, scanError: EditorSession.failure(e) }));
   }
 
+  /**
+   * Status on the chip and in the panel. Busy work is never replaced by a new scan: anything
+   * running, and a date run that can still be undone, since closing it loses the Undo.
+   */
   private reportActivity(label: string | null): void {
-    if (label === this.#lastActivity) return;
-    this.#lastActivity = label;
-    this.#gateway.reportActivity(label).catch((e: unknown) => console.error("[pixlixir] could not update the chip", e));
+    const running = this.snapshot.phase.name === "scanning" || this.snapshot.phase.name === "creating" || this.snapshot.phase.name === "fixingDates";
+    const activity = label === null ? null : { label, busy: running || this.snapshot.undoableDateFix };
+    const key = JSON.stringify(activity);
+    if (key === this.#lastActivity) return;
+    this.#lastActivity = key;
+    this.#gateway.reportActivity(activity).catch((e: unknown) => console.error("[pixlixir] could not update the chip", e));
   }
 
   // ---- review --------------------------------------------------------------------
@@ -387,16 +329,6 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   }
 
   // ---- wrong dates ---------------------------------------------------------------------
-
-  /** Opens this account's filename formats in a tab. The next scan uses them. */
-  async openSettings(): Promise<void> {
-    try {
-      const { params } = this.snapshot;
-      await Messenger.toBackground({ type: "panel.openSettings", tabId: await this.photosTab(params.email, params.tabId) });
-    } catch (err) {
-      this.set({ scanError: EditorSession.failure(err) });
-    }
-  }
 
   toggleDateFix(mediaKey: string): void {
     this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.finding.item.mediaKey === mediaKey && !d.fixed ? { ...d, selected: !d.selected } : d)) });
@@ -468,7 +400,9 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
         this.set({ phase: { name: "fixingDates", done: restored.size, total: planned.length } });
       });
       this.#dateJob = await this.store().put<DateFixJob>({ ...original, status: "undone", changes: original.changes.map((c) => ({ ...c, applied: false })) });
-      this.set({ undoableDateFix: false });
+      this.set({ phase: { name: "review" }, undoableDateFix: false });
+      this.reportActivity("Scan results");
+      return;
     } catch (err) {
       // Paragraph: what is still changed stays undoable.
       const e = EditorSession.toError(err, "Could not put the dates back");
@@ -600,16 +534,5 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       if (shared * 2 >= items.length) return { webUrl: job.saved.webUrl };
     }
     return null;
-  }
-
-  static isoDate(d: Date): string {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-
-  /** Midnight (local time) of a yyyy-mm-dd date, as epoch ms. */
-  static localDayStart(iso: string): number {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-    if (!m) throw new PixError(ErrorCode.InvalidMessage, "Enter a valid date.", { value: iso });
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
   }
 }

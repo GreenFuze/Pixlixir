@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { AlbumRef, CreatedMediaItem, ItemDetails, ItemFileInfo, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
-import { TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
+import { MAX_SCAN_SELECTION, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 // ---- shared schemas ---------------------------------------------------------
 
@@ -29,9 +29,19 @@ export const SelectionSchema = z.discriminatedUnion("kind", [
 
 const ToolSchema = z.enum(TOOL_IDS as [ToolId, ...ToolId[]]);
 const MediaKeysSchema = z.array(z.string().min(10)).min(1).max(Math.max(...TOOL_IDS.map((t) => TOOLS[t].maxPhotos)));
-/** A selection handed to a library scan (larger than any editor accepts). */
-const ScanSelectionSchema = z.array(z.string().min(10)).max(5000);
 const AlbumRefSchema = z.object({ mediaKey: z.string().min(10), title: z.string(), shared: z.boolean() });
+/** What a scan should do. Its selection may be larger than any editor accepts. */
+const ScanPlanSchema = z.object({
+  scope: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("dateRange"), fromMs: z.number(), toMs: z.number() }),
+    z.object({ kind: z.literal("album"), album: AlbumRefSchema }),
+    z.object({ kind: z.literal("selection"), mediaKeys: z.array(z.string().min(10)).max(MAX_SCAN_SELECTION) }),
+    z.object({ kind: z.literal("library") }),
+  ]),
+  detectors: z.object({ panorama: z.boolean(), dates: z.boolean() }),
+  recheck: z.boolean(),
+});
+const ActivitySchema = z.object({ label: z.string().max(40), busy: z.boolean() });
 const PageTokenSchema = z.string().min(1).max(4000).nullable();
 
 const SerializedErrorSchema = z.object({ code: z.enum(Object.values(ErrorCode) as [ErrorCode, ...ErrorCode[]]), message: z.string(), details: z.record(z.string(), z.unknown()).optional() });
@@ -39,10 +49,10 @@ const SerializedErrorSchema = z.object({ code: z.enum(Object.values(ErrorCode) a
 // ---- content script -> service worker --------------------------------------
 
 export const ContentToBackground = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("tab.state"), account: AccountSchema.nullable(), sessionError: SerializedErrorSchema.nullable(), selection: SelectionSchema }),
+  z.object({ type: z.literal("tab.state"), account: AccountSchema.nullable(), sessionError: SerializedErrorSchema.nullable(), selection: SelectionSchema, activity: ActivitySchema.nullable() }),
   z.object({ type: z.literal("ui.openTool"), tool: ToolSchema, mediaKeys: MediaKeysSchema }),
   z.object({ type: z.literal("ui.openSidePanel") }),
-  z.object({ type: z.literal("ui.openScan"), mediaKeys: ScanSelectionSchema }),
+  z.object({ type: z.literal("ui.openScan"), plan: ScanPlanSchema }),
 ]);
 export type ContentToBackground = z.infer<typeof ContentToBackground>;
 
@@ -52,7 +62,7 @@ export const PageToBackground = z.discriminatedUnion("type", [
   z.object({ type: z.literal("panel.getState"), windowId: z.number().int() }),
   z.object({ type: z.literal("panel.openTool"), tool: ToolSchema, tabId: z.number().int(), mediaKeys: MediaKeysSchema }),
   z.object({ type: z.literal("photos.resolveTab"), email: z.string(), preferredTabId: z.number().int().nullable() }),
-  z.object({ type: z.literal("panel.openScan"), tabId: z.number().int(), mediaKeys: ScanSelectionSchema }),
+  z.object({ type: z.literal("panel.openScan"), tabId: z.number().int(), plan: ScanPlanSchema }),
   z.object({ type: z.literal("panel.openSettings"), tabId: z.number().int() }),
   z.object({ type: z.literal("panel.accounts") }),
 ]);
@@ -86,8 +96,9 @@ export const PageToContent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
   z.object({ type: z.literal("modal.open"), expectedEmail: z.string(), url: z.string().url() }),
   z.object({ type: z.literal("modal.minimize"), expectedEmail: z.string() }),
+  z.object({ type: z.literal("modal.restore"), expectedEmail: z.string() }),
   z.object({ type: z.literal("modal.close"), expectedEmail: z.string() }),
-  z.object({ type: z.literal("modal.activity"), expectedEmail: z.string(), label: z.string().max(40).nullable() }),
+  z.object({ type: z.literal("modal.activity"), expectedEmail: z.string(), activity: ActivitySchema.nullable() }),
 ]);
 export type PageToContent = z.infer<typeof PageToContent>;
 
@@ -95,8 +106,12 @@ export type PageToContent = z.infer<typeof PageToContent>;
 
 export type Envelope<T> = { ok: true; value: T } | { ok: false; error: SerializedError };
 
+/** Work in the scan modal of a tab. Busy work must not be replaced by a new scan. */
+export type TabActivity = z.infer<typeof ActivitySchema>;
+
 export interface TabState {
   tabId: number;
+  activity: TabActivity | null;
   account: z.infer<typeof AccountSchema> | null;
   sessionError: SerializedError | null;
   selection: z.infer<typeof SelectionSchema>;
@@ -107,6 +122,8 @@ export interface PanelState {
   activeTab: TabState | null;
   /** True when the active tab is not a Google Photos tab. */
   activeIsPhotos: boolean;
+  /** The album open in the active tab. */
+  albumKey: string | null;
 }
 
 export interface ReplyMap {
@@ -128,8 +145,10 @@ export interface ReplyMap {
   "panel.openScan": null;
   "panel.openSettings": null;
   "panel.accounts": { emails: string[] };
-  "modal.open": null;
+  /** started: false means running work was brought back instead. */
+  "modal.open": { started: boolean };
   "modal.minimize": null;
+  "modal.restore": null;
   "modal.close": null;
   "modal.activity": null;
 }
