@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GreenFuze/Pixlixir/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/GreenFuze/Pixlixir?include_prereleases&label=download&color=6b4fbb"></a>
+  <a href="https://github.com/GreenFuze/Pixlixir/releases"><img alt="Download" src="https://img.shields.io/github/v/release/GreenFuze/Pixlixir?include_prereleases&label=download&color=6b4fbb"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
   <img alt="Chrome extension" src="https://img.shields.io/badge/Chrome-extension-4285F4?logo=googlechrome&logoColor=white">
   <img alt="Runs locally" src="https://img.shields.io/badge/processing-100%25%20local-2ea44f">
@@ -77,7 +77,7 @@ with live progress and time left. Results are saved, so the next scan only check
 
 Pixlixir is not in the Chrome Web Store yet. Installing it takes a minute:
 
-1. **Download** `pixlixir-vX.Y.Z.zip` from the [latest release](https://github.com/GreenFuze/Pixlixir/releases/latest).
+1. **Download** `pixlixir-vX.Y.Z.zip` from the [latest release](https://github.com/GreenFuze/Pixlixir/releases).
 2. **Unzip** it into a folder you'll keep (Chrome loads the extension from there).
 3. Open **`chrome://extensions`**, switch on **Developer mode** (top right), click **Load unpacked**
    and choose the unzipped folder.
