@@ -6,7 +6,7 @@
 
 import { ScanPlans, type ScanPlan } from "../scan/scan-plan.js";
 
-export type ToolId = "split" | "panorama";
+export type ToolId = "split" | "panorama" | "edit";
 
 export interface ToolSpec {
   id: ToolId;
@@ -23,6 +23,7 @@ export interface ToolSpec {
 export const TOOLS: Record<ToolId, ToolSpec> = {
   split: { id: "split", label: "Split into Photos", short: "Split", page: "split.html", minPhotos: 1, maxPhotos: 100, hint: "Select or open 1–100 scanned photos to split them into separate pictures." },
   panorama: { id: "panorama", label: "Create panorama", short: "Panorama", page: "panorama.html", minPhotos: 2, maxPhotos: 40, hint: "Select 2–40 overlapping photos to stitch them into a panorama." },
+  edit: { id: "edit", label: "Edit with AI", short: "Edit", page: "edit.html", minPhotos: 1, maxPhotos: 1, hint: "Select or open one photo to edit it." },
 };
 
 export const TOOL_IDS = Object.keys(TOOLS) as ToolId[];

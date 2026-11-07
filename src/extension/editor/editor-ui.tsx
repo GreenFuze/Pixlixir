@@ -13,7 +13,7 @@ export function useSnapshot<S>(session: { snapshot: S; subscribe(fn: (s: S) => v
 
 export function ErrorBox(props: { error: SerializedError }) {
   return (
-    <div class="error-box" role="alert">
+    <div class="error-box" role="alert" title={props.error.details ? JSON.stringify(props.error.details) : undefined}>
       <strong>{props.error.message}</strong>
       <div><code>{props.error.code}</code></div>
     </div>

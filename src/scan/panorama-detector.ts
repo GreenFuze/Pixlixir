@@ -10,7 +10,7 @@
  */
 
 import type { LibraryItem } from "../domain/types.js";
-import { ErrorCode, PixError } from "../shared/errors.js";
+import { ErrorCode, PixError, type SerializedError } from "../shared/errors.js";
 import type { ScanCache } from "./scan-cache.js";
 import { ScanFailures, type DetectorStats, type ScanContext, type ScanDetector, type ScanFinding } from "./scan-detector.js";
 
@@ -106,8 +106,8 @@ export interface SavedSequence {
 
 /** Decides which photos of a time sequence overlap (and previews each group). */
 export interface OverlapChecker {
-  /** `onProgress` receives how far along this sequence is (0..1). */
-  check(sequence: readonly LibraryItem[], signal: AbortSignal, onProgress: (fraction: number) => void): Promise<OverlapGroup[]>;
+  /** `onProgress` receives how far along this sequence is (0..1); `onLeftOut` each photo checked without. */
+  check(sequence: readonly LibraryItem[], signal: AbortSignal, onProgress: (fraction: number) => void, onLeftOut?: (error: SerializedError) => void): Promise<OverlapGroup[]>;
 }
 
 export interface PanoramaCandidate extends ScanFinding {
@@ -115,8 +115,14 @@ export interface PanoramaCandidate extends ScanFinding {
   items: LibraryItem[];
   preview: CandidatePreview;
   thumbs: Record<string, Blob>;
-  /** A panorama Pixlixir already saved from (most of) these photos. */
-  alreadyMade: { webUrl: string } | null;
+  /** A panorama Pixlixir already saved from half of these photos: more than half hides the group. */
+  alreadyMade: AlreadyMade | null;
+}
+
+export interface AlreadyMade {
+  webUrl: string;
+  /** Most of these photos are in it, so showing them again would only repeat it. */
+  covers: boolean;
 }
 
 /**
@@ -149,7 +155,7 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
     /** One per engine: sequences are checked side by side. */
     checkers: OverlapChecker | readonly OverlapChecker[],
     /** Gets the group's items (album listings use album-specific keys; dedup keys are stable everywhere). */
-    private readonly alreadyMade: (items: readonly LibraryItem[]) => { webUrl: string } | null,
+    private readonly alreadyMade: (items: readonly LibraryItem[]) => AlreadyMade | null,
     private readonly cache: ScanCache<SavedSequence>,
     /** Ignore saved results and check every photo again. */
     private readonly recheck: boolean = false,
@@ -168,6 +174,7 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
     const sequences = TimeSequenceGrouper.group(items, this.options);
     const byKey = new Map(items.map((i) => [i.mediaKey, i]));
     const stats: DetectorStats = { photosReused: 0, photosChecked: 0, failures: [] };
+    const hidden = { count: 0 };
 
     // Paragraph: saved results first, so earlier findings appear at once and progress only counts new work.
     const pending: LibraryItem[][] = [];
@@ -179,7 +186,7 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
         continue;
       }
       stats.photosReused += sequence.length;
-      for (const g of PanoramaDetector.fromSaved(saved, sequence)) this.emitGroup(g, byKey, emit);
+      for (const g of PanoramaDetector.fromSaved(saved, sequence)) this.emitGroup(g, byKey, emit, hidden);
     }
 
     // Paragraph: check the rest with the stitching engine; progress counts photos, not sequences.
@@ -197,12 +204,15 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
         inProgress.set(sequence, 0);
         report();
         try {
+          const leftOut: SerializedError[] = [];
           const groups = await checker.check(sequence, ctx.signal, (f) => {
             inProgress.set(sequence, Math.floor(f * sequence.length));
             report();
-          });
-          for (const g of groups) this.emitGroup(g, byKey, emit);
-          await this.cache.put(PanoramaDetector.signature(sequence), PanoramaDetector.toSaved(groups, byKey));
+          }, (e) => leftOut.push(e));
+          for (const g of groups) this.emitGroup(g, byKey, emit, hidden);
+          // A sequence checked without a photo is not saved, so the next scan tries that photo again.
+          if (leftOut.length === 0) await this.cache.put(PanoramaDetector.signature(sequence), PanoramaDetector.toSaved(groups, byKey));
+          stats.failures.push(...leftOut);
           inARow = 0;
         } catch (err) {
           const e = err instanceof PixError ? err : PixError.wrap(err, ErrorCode.StitchFailed, "Could not check a sequence of photos");
@@ -216,12 +226,19 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
     await Promise.all(this.#checkers.map(work));
     if (stop.error) throw stop.error;
     ctx.progress("Checking new photos", total, total);
+    if (hidden.count > 0) stats.alreadyMade = hidden.count;
     return stats;
   }
 
-  private emitGroup(g: OverlapGroup, byKey: Map<string, LibraryItem>, emit: (finding: PanoramaCandidate) => void): void {
+  /** A group already made is not shown again, unless the user asked to re-check everything. */
+  private emitGroup(g: OverlapGroup, byKey: Map<string, LibraryItem>, emit: (finding: PanoramaCandidate) => void, hidden: { count: number }): void {
     const keys = g.mediaKeys;
     const groupItems = keys.map((k) => byKey.get(k)!);
+    const made = this.alreadyMade(groupItems);
+    if (made?.covers && !this.recheck) {
+      hidden.count++;
+      return;
+    }
     emit({
       id: `panorama:${keys[0]}:${keys.length}`,
       detector: "panorama",
@@ -229,7 +246,7 @@ export class PanoramaDetector implements ScanDetector<PanoramaCandidate> {
       items: groupItems,
       preview: g.preview,
       thumbs: g.thumbs,
-      alreadyMade: this.alreadyMade(groupItems),
+      alreadyMade: made,
     });
   }
 

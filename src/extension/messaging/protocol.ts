@@ -94,6 +94,7 @@ export const PageToContent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("photos.moveToTrash"), expectedEmail: z.string(), dedupKeys: z.array(z.string().min(10)).min(1).max(100) }),
   z.object({ type: z.literal("photos.listTrash"), expectedEmail: z.string(), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.thumbnail"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000), maxSide: z.number().int().min(64).max(2048) }),
+  z.object({ type: z.literal("photos.fileHead"), expectedEmail: z.string(), baseUrl: z.string().url().max(2000) }),
   z.object({ type: z.literal("photos.addToAlbum"), expectedEmail: z.string(), mediaKeys: z.array(z.string().min(10)).min(1).max(50), album: AlbumRefSchema }),
   z.object({ type: z.literal("photos.setDescription"), expectedEmail: z.string(), dedupKey: z.string().min(10), description: z.string().min(1).max(10000) }),
   z.object({ type: z.literal("modal.open"), expectedEmail: z.string(), url: z.string().url() }),
@@ -144,6 +145,7 @@ export interface ReplyMap {
   "photos.moveToTrash": null;
   "photos.listTrash": Page<string>;
   "photos.thumbnail": { bytesBase64: string; mimeType: string };
+  "photos.fileHead": { bytesBase64: string };
   "photos.addToAlbum": null;
   "photos.setDescription": null;
   "panel.openScan": null;

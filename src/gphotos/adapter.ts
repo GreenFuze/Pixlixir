@@ -25,6 +25,8 @@ export interface PhotosLibraryAdapter {
   getItem(mediaKey: string): Promise<MediaItemInfo>;
   /** Full-resolution bytes of a photo. */
   downloadOriginal(mediaKey: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
+  /** The start of a photo's file, where its details are, without downloading the rest. */
+  fetchFileHead(baseUrl: string): Promise<Uint8Array>;
   uploadPhoto(bytes: Uint8Array, fileName: string, options: UploadOptions): Promise<CreatedMediaItem>;
 
   // ---- reading the library (read-only) ----

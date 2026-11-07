@@ -1,7 +1,10 @@
+import jpeg from "jpeg-js";
+import piexif from "piexifjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DateChange, ItemFileInfo, LibraryItem } from "../../src/domain/types.js";
 import { FormatStore } from "../../src/extension/storage/format-store.js";
-import { DateCorrection, DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../src/scan/date-fix.js";
+import { DateCorrection, DateFixApplier, ExportDateGuard, FilenameDateDetector, SavedCopyName, type DateFixFinding, type PlannedDate } from "../../src/scan/date-fix.js";
+import { FileDetailsReader } from "../../src/scan/file-details.js";
 import { FilenameFormat, FilenameFormats } from "../../src/scan/filename-format.js";
 import type { ScanCache } from "../../src/scan/scan-cache.js";
 import { ErrorCode, PixError } from "../../src/shared/errors.js";
@@ -129,6 +132,34 @@ function memory(): ScanCache<string> & { map: Map<string, string> } {
   return { map, get: async (k) => map.get(k) ?? null, put: async (k, v) => void map.set(k, v) };
 }
 
+/** Files with no details, like a stripped WhatsApp file. */
+const noHeads = { fileHead: async () => new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) };
+
+/** A small JPEG with a date taken, as the file's own details. */
+function jpegTaken(taken: string | null, make: string | null = null): Uint8Array {
+  const shell = Buffer.from(jpeg.encode({ width: 2, height: 2, data: Buffer.alloc(16, 128) }, 80).data).toString("binary");
+  const dumped = piexif.dump({ "0th": make ? { [piexif.ImageIFD.Make]: make } : {}, Exif: taken ? { [piexif.ExifIFD.DateTimeOriginal]: taken } : {}, GPS: {}, Interop: {}, "1st": {} });
+  return Uint8Array.from(piexif.insert(dumped, shell), (c) => c.charCodeAt(0));
+}
+
+describe("A file's own details", () => {
+  it("reads the date taken, the camera, and nothing from a file without them", () => {
+    expect(FileDetailsReader.parse(jpegTaken("2015:03:04 10:20:30", "Canon"))).toMatchObject({ takenLocalMs: Date.UTC(2015, 2, 4, 10, 20, 30), camera: true });
+    expect(FileDetailsReader.parse(jpegTaken(null))).toMatchObject({ takenLocalMs: null, camera: false });
+    expect(FileDetailsReader.parse(jpegTaken("0000:00:00 00:00:00"))?.takenLocalMs).toBeNull();
+    expect(FileDetailsReader.parse(new Uint8Array([1, 2, 3]))).toBeNull();
+  });
+
+  it("allows a day either way for time zones, and says nothing without a date", () => {
+    const details = (takenLocalMs: number | null) => ({ takenLocalMs, camera: false, software: null });
+    const name = Date.UTC(2022, 11, 2);
+    expect(FileDetailsReader.compare(details(name + 30 * 3_600_000), name)).toBe("agrees");
+    expect(FileDetailsReader.compare(details(Date.UTC(2015, 0, 1)), name)).toBe("disagrees");
+    expect(FileDetailsReader.compare(details(null), name)).toBe("unknown");
+    expect(FileDetailsReader.compare(null, name)).toBe("unknown");
+  });
+});
+
 describe("FilenameDateDetector", () => {
   const ctx = { signal: new AbortController().signal, progress: () => {} };
   const formats = new FilenameFormats([{ mask: "IMG-yyyymmdd*.*", utc: false }]);
@@ -138,7 +169,7 @@ describe("FilenameDateDetector", () => {
     const reads: string[][] = [];
     const found: DateFixFinding[] = [];
     const source = { readItemInfo: async (keys: string[]) => { reads.push(keys); return items.filter((i) => keys.includes(i.mediaKey) && names.has(i.mediaKey)).map((i) => info(i, names.get(i.mediaKey)!)); } };
-    const stats = await new FilenameDateDetector(source, formats, cache).analyze(items, ctx, (f) => found.push(f));
+    const stats = await new FilenameDateDetector(source, formats, cache, noHeads).analyze(items, ctx, (f) => found.push(f));
     return { reads, found, stats, cache };
   }
 
@@ -148,6 +179,121 @@ describe("FilenameDateDetector", () => {
     const { found } = await run(items, names);
     expect(found.map((f) => f.item.mediaKey)).toEqual([items[0]!.mediaKey]);
     expect(found[0]).toMatchObject({ fileName: "IMG-20190512.jpg", mask: "IMG-yyyymmdd*.*" });
+  });
+
+  it("does not trust a date many files share while their own dates are far apart", async () => {
+    // Paragraph: the owner's real case: one export day, dates years apart (2013 to 2022).
+    const DAY = 86_400_000;
+    const exported = Array.from({ length: ExportDateGuard.MIN_FILES }, (_, n) => item(n + 1, { takenAtMs: Date.UTC(2013 + n * 2, 2, 3, 14, 3) }));
+    const whatsapp = Array.from({ length: ExportDateGuard.MIN_FILES }, (_, n) => item(n + 20, { takenAtMs: Date.UTC(2024, 5, 1) + n * DAY }));
+    const names = new Map<string, string | null>([...exported.map((i, n) => [i.mediaKey, `IMG-20221202(${n}).jpg`] as [string, string]), ...whatsapp.map((i, n) => [i.mediaKey, `IMG-20190512(${n}).jpg`] as [string, string])]);
+    const { found } = await run([...exported, ...whatsapp], names);
+    const of = (name: string) => found.filter((f) => f.fileName.includes(name));
+    expect(of("20221202").every((f) => f.exportDate)).toBe(true);
+    expect(of("20190512").every((f) => !f.exportDate)).toBe(true);
+    expect(found.slice(0, ExportDateGuard.MIN_FILES).every((f) => !f.exportDate)).toBe(true); // the likely right ones first
+  });
+
+  it("needs enough files: a few photos far apart may really share a name date", async () => {
+    const few = Array.from({ length: ExportDateGuard.MIN_FILES - 1 }, (_, n) => item(n + 1, { takenAtMs: Date.UTC(2013 + n * 2, 2, 3) }));
+    const { found } = await run(few, new Map(few.map((i, n) => [i.mediaKey, `IMG-20221202(${n}).jpg`] as [string, string])));
+    expect(found).toHaveLength(few.length);
+    expect(found.some((f) => f.exportDate)).toBe(false);
+  });
+
+  it("knows one saved copy by its name alone, as when only that photo is selected", async () => {
+    // Paragraph: the owner's real file, alone, so the guard for many files cannot help.
+    const copy = item(1, { width: 4000, height: 3000 });
+    const dated = new FilenameFormats([{ mask: "yyyy-mm-dd*.*", utc: false }]);
+    const found: DateFixFinding[] = [];
+    await new FilenameDateDetector({ readItemInfo: async () => [info(copy, "2022-12-02 (3).jpg")] }, dated, memory(), noHeads).analyze([copy], ctx, (f) => found.push(f));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ exportDate: true, copyReason: "name" });
+  });
+
+  describe("with the file's own date", () => {
+    const dated = new FilenameFormats([{ mask: "*yyyy-mm-dd*.*", utc: false }]);
+
+    /** Scans one file with these details and returns the finding. */
+    async function judge(fileName: string, head: Uint8Array, over: Partial<LibraryItem> = {}, heads = { fileHead: async () => head }, cache = memory()) {
+      const one = item(1, { width: 4000, height: 3000, ...over });
+      const found: DateFixFinding[] = [];
+      const stats = await new FilenameDateDetector({ readItemInfo: async () => [info(one, fileName)] }, dated, cache, heads).analyze([one], ctx, (f) => found.push(f));
+      return { finding: found[0]!, stats };
+    }
+
+    it("makes a copy of a file that disagrees with its name, whatever the name looks like", async () => {
+      // Paragraph: an edit with a normal-looking name: nothing but the file could tell.
+      const { finding } = await judge("IMG_2019-05-12_edit.jpg", jpegTaken("2012:01:01 10:00:00"));
+      expect(finding).toMatchObject({ exportDate: true, copyReason: "file" });
+    });
+
+    it("trusts a name its file backs, even a name that looks like a saved copy", async () => {
+      const { finding } = await judge("2019-05-12 (3).jpg", jpegTaken("2019:05:12 10:00:00"), { width: 800, height: 600 });
+      expect(finding).toMatchObject({ exportDate: false, copyReason: null, fileAgrees: true });
+    });
+
+    it("judges a file with no date by its name: WhatsApp and others strip it", async () => {
+      expect((await judge("IMG-2019-05-12-WA0001.jpg", jpegTaken(null))).finding).toMatchObject({ exportDate: false, copyReason: null, fileAgrees: false });
+      expect((await judge("2019-05-12 (3).jpg", jpegTaken(null))).finding).toMatchObject({ exportDate: true, copyReason: "name" });
+    });
+
+    it("never lets the guard mark a file that backs its name", async () => {
+      const many = Array.from({ length: ExportDateGuard.MIN_FILES }, (_, n) => item(n + 1, { takenAtMs: Date.UTC(2013 + n * 2, 2, 3) }));
+      const found: DateFixFinding[] = [];
+      const source = { readItemInfo: async () => many.map((i, n) => info(i, `IMG 2019-05-12 ${n}.jpg`)) };
+      await new FilenameDateDetector(source, dated, memory(), { fileHead: async () => jpegTaken("2019:05:12 10:00:00") }).analyze(many, ctx, (f) => found.push(f));
+      expect(found.every((f) => !f.exportDate)).toBe(true);
+    });
+
+    it("reads a file once, and counts one it cannot read while judging it by its name", async () => {
+      // Paragraph: the second scan answers from what was saved, even when the file had no details.
+      const cache = memory();
+      let reads = 0;
+      const counting = { fileHead: async () => { reads++; return jpegTaken(null); } };
+      await judge("2019-05-12 x.jpg", new Uint8Array(), {}, counting, cache);
+      await judge("2019-05-12 x.jpg", new Uint8Array(), {}, counting, cache);
+      expect(reads).toBe(1);
+
+      const failing = { fileHead: async () => { throw new PixError(ErrorCode.MediaFetchFailed, "no"); } };
+      const { finding, stats } = await judge("2019-05-12 (3).jpg", new Uint8Array(), {}, failing);
+      expect(finding).toMatchObject({ exportDate: true, copyReason: "name" });
+      expect(stats.failures[0]!.message).toContain("could not be read for their details");
+    });
+
+    it("stops the scan on a failure that means the session is wrong", async () => {
+      const wrongAccount = { fileHead: async () => { throw new PixError(ErrorCode.AccountMismatch, "no"); } };
+      await expect(judge("2019-05-12.jpg", new Uint8Array(), {}, wrongAccount)).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
+    });
+
+    it("does not try to read a video's file", async () => {
+      let reads = 0;
+      await judge("2019-05-12.mp4", new Uint8Array(), { type: "video" }, { fileHead: async () => { reads++; return new Uint8Array(); } });
+      expect(reads).toBe(0);
+    });
+  });
+
+  it("tells a saved copy's name from a camera's", () => {
+    const big = { width: 4000, height: 3000 }, small = { width: 1080, height: 720 };
+    expect(SavedCopyName.matches("2022-12-02 (3).jpg", big)).toBe(true);
+    expect(SavedCopyName.matches("2022-12-02(3).jpg", big)).toBe(true);
+    expect(SavedCopyName.matches("2022-12-02.jpg", small)).toBe(true);
+
+    // Paragraph: a full-size photo named by date, and names with more in them, keep trusting the name.
+    expect(SavedCopyName.matches("2022-12-02.jpg", big)).toBe(false);
+    expect(SavedCopyName.matches("2022-12-02.jpg", { width: 0, height: 0 })).toBe(false);
+    expect(SavedCopyName.matches("IMG-20190512-WA0001.jpg", small)).toBe(false);
+    expect(SavedCopyName.matches("2022-12-02 holiday.jpg", small)).toBe(false);
+  });
+
+  it("never suggests a date from a format marked as saved, and it still counts as known", async () => {
+    const saved = new FilenameFormats([{ mask: "IMG-yyyymmdd*.*", utc: false, saved: true }]);
+    const one = item(1);
+    const found: DateFixFinding[] = [];
+    const source = { readItemInfo: async () => [info(one, "IMG-20190512.jpg")] };
+    const stats = await new FilenameDateDetector(source, saved, memory(), noHeads).analyze([one], ctx, (f) => found.push(f));
+    expect(found).toEqual([]);
+    expect(stats.unmatchedNames).toBe(0);
   });
 
   it("reads each file name once, even when an album lists the item under another key", async () => {
@@ -179,14 +325,14 @@ describe("FilenameDateDetector", () => {
   it("goes on after a failed batch, but stops on account problems", async () => {
     const items = Array.from({ length: FilenameDateDetector.NAMES_PER_REQUEST + 1 }, (_, n) => item(n));
     const failing = (code: ErrorCode) => ({ readItemInfo: async () => { throw new PixError(code, "nope"); } });
-    const stats = await new FilenameDateDetector(failing(ErrorCode.RpcEnvelopeMissing), formats, memory()).analyze(items, ctx, () => {});
+    const stats = await new FilenameDateDetector(failing(ErrorCode.RpcEnvelopeMissing), formats, memory(), noHeads).analyze(items, ctx, () => {});
     expect(stats.failures).toHaveLength(2);
-    await expect(new FilenameDateDetector(failing(ErrorCode.AccountMismatch), formats, memory()).analyze(items, ctx, () => {})).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
+    await expect(new FilenameDateDetector(failing(ErrorCode.AccountMismatch), formats, memory(), noHeads).analyze(items, ctx, () => {})).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
   });
 });
 
 describe("DateFixApplier", () => {
-  const plan = (n: number): PlannedDate => ({ mediaKey: `key${n}`, dedupKey: `dedup${n}`, takenAtMs: 1_000_000_000_000 + n * 1000, timezoneOffsetMs: 7_200_000 });
+  const plan = (n: number): PlannedDate => ({ mediaKey: `key${n}`, fileName: `file${n}.jpg`, dedupKey: `dedup${n}`, takenAtMs: 1_000_000_000_000 + n * 1000, timezoneOffsetMs: 7_200_000 });
 
   /** A Google that stores what it is told, except the dedup keys in `refuse`. */
   function google(refuse: string[] = []) {
@@ -214,6 +360,12 @@ describe("DateFixApplier", () => {
     await expect(run).rejects.toMatchObject({ code: ErrorCode.DateNotApplied });
     expect(applied).toHaveLength(99);
     expect(g.writes).toEqual([100]);
+  });
+
+  it("names the file that did not stick", async () => {
+    const writer = { setDates: async () => {}, readItemInfo: async (keys: string[]) => keys.map((mediaKey) => ({ mediaKey, fileName: null, takenAtMs: 5_000, timezoneOffsetMs: 0 })) };
+    const run = new DateFixApplier(writer).run([{ mediaKey: "AF1QipITEM", fileName: "2022-12-02 (3).jpg", dedupKey: "d", takenAtMs: 9_000, timezoneOffsetMs: 0 }], () => false, () => {});
+    await expect(run).rejects.toMatchObject({ code: ErrorCode.DateNotApplied, message: "1 of 1 items did not get the new date: 2022-12-02 (3).jpg. Stopped.", details: { examples: [{ wantedMs: 9_000, gotMs: 5_000 }] } });
   });
 
   it("notices a wrong time zone too, and compares whole seconds", async () => {

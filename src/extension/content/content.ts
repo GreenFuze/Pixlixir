@@ -99,6 +99,8 @@ class ContentApp {
         const { bytes, mimeType } = await adapter.fetchThumbnail(msg.baseUrl, msg.maxSide);
         return { bytesBase64: Base64.encode(bytes), mimeType };
       }
+      case "photos.fileHead":
+        return { bytesBase64: Base64.encode(await adapter.fetchFileHead(msg.baseUrl)) };
       case "photos.addToAlbum":
         await adapter.addToAlbum(msg.mediaKeys, msg.album);
         return null;

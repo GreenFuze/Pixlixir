@@ -97,7 +97,7 @@ describe("PanoramaDetector + LibraryScanner", () => {
         return [{ mediaKeys: [key(1), key(2)], preview: { image: new Blob(["p"]), width: 10, height: 5, motion: "rotate" }, thumbs: {} }];
       },
     };
-    const detector = new PanoramaDetector(checker, (group) => (group.some((i) => i.mediaKey === key(1)) ? { webUrl: "mock://done" } : null), memoryCache());
+    const detector = new PanoramaDetector(checker, (group) => (group.some((i) => i.mediaKey === key(1)) ? { webUrl: "mock://done", covers: false } : null), memoryCache());
     const { source } = catalogOver(items);
     const found: PanoramaCandidate[] = [];
     const steps: string[] = [];
@@ -107,8 +107,44 @@ describe("PanoramaDetector + LibraryScanner", () => {
     expect(summary).toMatchObject({ itemsListed: 5, photos: 5, findings: 1 });
     expect(found[0]!.mediaKeys).toEqual([key(1), key(2)]);
     expect(found[0]!.items.map((i) => i.mediaKey)).toEqual([key(1), key(2)]);
-    expect(found[0]!.alreadyMade).toEqual({ webUrl: "mock://done" });
+    expect(found[0]!.alreadyMade).toEqual({ webUrl: "mock://done", covers: false });
     expect(steps.some((s) => s.startsWith("Listing photos"))).toBe(true);
+  });
+
+  it("does not show a group a panorama already covers, counts it, and shows it again on Re-check all", async () => {
+    const items = [item(1, 0), item(2, 3)];
+    const checker: OverlapChecker = { check: async () => [{ mediaKeys: [key(1), key(2)], preview: { image: new Blob(["p"]), width: 10, height: 5, motion: "rotate" }, thumbs: {} }] };
+    const made = () => ({ webUrl: "mock://done", covers: true });
+    const { source } = catalogOver(items);
+    const found: PanoramaCandidate[] = [];
+    const cache = memoryCache();
+    const summary = await new LibraryScanner(new LibraryCatalog(source), [new PanoramaDetector(checker, made, cache)]).run({ kind: "library" }, { signal, progress: () => {} }, (f) => found.push(f as PanoramaCandidate));
+    expect(found).toEqual([]);
+    expect(summary.alreadyMade).toBe(1);
+
+    // Paragraph: from saved results too.
+    const saved = await new LibraryScanner(new LibraryCatalog(source), [new PanoramaDetector(checker, made, cache)]).run({ kind: "library" }, { signal, progress: () => {} }, (f) => found.push(f as PanoramaCandidate));
+    expect(found).toEqual([]);
+    expect(saved.alreadyMade).toBe(1);
+
+    const again = await new LibraryScanner(new LibraryCatalog(source), [new PanoramaDetector(checker, made, cache, true)]).run({ kind: "library" }, { signal, progress: () => {} }, (f) => found.push(f as PanoramaCandidate));
+    expect(found).toHaveLength(1);
+    expect(again.alreadyMade).toBe(0);
+  });
+
+  it("checks the rest of a sequence without a photo it cannot read, says which, and tries it again next time", async () => {
+    const items = [item(1, 0), item(2, 3), item(3, 5)];
+    const failure = { code: ErrorCode.MediaDecodeFailed, message: "A photo could not be read", details: { mediaKey: key(3) } };
+    let checks = 0;
+    const checker: OverlapChecker = { check: async (_s, _sig, _p, onLeftOut) => { checks++; onLeftOut?.(failure); return [{ mediaKeys: [key(1), key(2)], preview: { image: new Blob(["p"]), width: 10, height: 5, motion: "rotate" }, thumbs: {} }]; } };
+    const cache = memoryCache();
+    const found: PanoramaCandidate[] = [];
+    const context = { signal, progress: () => {} };
+    const r = await new PanoramaDetector(checker, () => null, cache).analyze(items, context, (f) => found.push(f));
+    expect(found).toHaveLength(1);
+    expect(r.failures).toEqual([failure]);
+    await new PanoramaDetector(checker, () => null, cache).analyze(items, context, () => {});
+    expect(checks).toBe(2);
   });
 });
 
@@ -311,8 +347,15 @@ describe("ScanSession.alreadyMade", () => {
     const { ScanSession } = await import("../../src/extension/scan/scan-session.js");
     const job = { saved: { webUrl: "https://photos.google.com/photo/X" }, usedDedupKeys: [item(1, 0).dedupKey, item(2, 3).dedupKey], usedMediaKeys: ["AF1QipLIBRARYKEY01"], sourceMediaKeys: [] } as never;
     const albumView = [item(1, 0, { mediaKey: "AF1QipALBUMITEMKEY1" }), item(2, 3, { mediaKey: "AF1QipALBUMITEMKEY2" }), item(3, 6)];
-    expect(ScanSession.alreadyMade([job], albumView)).toEqual({ webUrl: "https://photos.google.com/photo/X" });
+    expect(ScanSession.alreadyMade([job], albumView)).toEqual({ webUrl: "https://photos.google.com/photo/X", covers: true });
     expect(ScanSession.alreadyMade([job], [item(3, 6), item(4, 9), item(5, 12)])).toBeNull();
+  });
+
+  it("covers a group only when most of it is in the panorama: half keeps the row, marked", async () => {
+    const { ScanSession } = await import("../../src/extension/scan/scan-session.js");
+    const job = { saved: { webUrl: "u" }, usedDedupKeys: [item(1, 0).dedupKey, item(2, 3).dedupKey], usedMediaKeys: [], sourceMediaKeys: [] } as never;
+    expect(ScanSession.alreadyMade([job], [item(1, 0), item(2, 3)])!.covers).toBe(true);
+    expect(ScanSession.alreadyMade([job], [item(2, 3), item(3, 6)])!.covers).toBe(false);
   });
 });
 

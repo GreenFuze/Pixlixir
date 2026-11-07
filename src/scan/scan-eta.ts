@@ -13,6 +13,13 @@ export class ScanEta {
     return Math.round(((nowMs - this.#startedMs) / done) * (total - done) / 1000);
   }
 
+  /** How long something took. */
+  static elapsed(seconds: number): string {
+    if (seconds < 60) return `${Math.max(1, Math.round(seconds))} s`;
+    const minutes = Math.round(seconds / 60);
+    return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+  }
+
   static format(seconds: number): string {
     if (seconds < 60) return "less than a minute left";
     const minutes = Math.round(seconds / 60);

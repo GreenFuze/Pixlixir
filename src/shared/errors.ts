@@ -49,6 +49,12 @@ export const ErrorCode = {
   OriginalsKept: "ORIGINALS_KEPT",
 
   // Generic
+  EditResultInvalid: "EDIT_RESULT_INVALID",
+  ClipboardFailed: "CLIPBOARD_FAILED",
+  InvalidService: "INVALID_SERVICE",
+  MetadataNotCopied: "METADATA_NOT_COPIED",
+  SiteFillFailed: "SITE_FILL_FAILED",
+  LocalEngineFailed: "LOCAL_ENGINE_FAILED",
   Cancelled: "CANCELLED",
   Internal: "INTERNAL",
 } as const;

@@ -5,16 +5,25 @@
  * extension's own CSP. Requires `npm run build` and `npx playwright install chromium`.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import ExifReader from "exifreader";
+import jpeg from "jpeg-js";
+import piexif from "piexifjs";
 import { chromium, type BrowserContext, type Frame, type Page, type Worker } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakePhotos, makeOverlappingShots, type FakePhoto } from "./fake-photos.js";
 
-const DIST = path.resolve(process.env.PIXLIXIR_DIST ?? "dist");
+const SOURCE_DIST = path.resolve(process.env.PIXLIXIR_DIST ?? "dist");
 const T0 = Date.UTC(2024, 6, 14, 9, 0, 0);
+
+/** The same JPEG with a date taken in its own details. */
+function withTakenDate(file: Buffer, taken: string): Buffer {
+  return Buffer.from(piexif.insert(piexif.dump({ "0th": {}, Exif: { [piexif.ExifIFD.DateTimeOriginal]: taken }, GPS: {}, Interop: {}, "1st": {} }), file.toString("binary")), "binary");
+}
 
 describe("real extension", () => {
   let context: BrowserContext;
@@ -27,6 +36,14 @@ describe("real extension", () => {
   beforeAll(async () => {
     // Paragraph: Chromium with the built extension.
     profile = mkdtempSync(path.join(tmpdir(), "pixlixir-e2e-"));
+
+    // Paragraph: a copy with the optional permissions already granted, since no one can answer Chrome's question here.
+    const DIST = path.join(profile, "extension");
+    cpSync(SOURCE_DIST, DIST, { recursive: true });
+    const manifest = JSON.parse(readFileSync(path.join(DIST, "manifest.json"), "utf-8")) as { permissions: string[]; host_permissions: string[]; optional_permissions: string[]; optional_host_permissions: string[] };
+    manifest.permissions.push(...manifest.optional_permissions);
+    manifest.host_permissions.push(...manifest.optional_host_permissions);
+    writeFileSync(path.join(DIST, "manifest.json"), JSON.stringify(manifest));
     context = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`] });
     sw = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     extensionId = new URL(sw.url()).host;
@@ -36,7 +53,7 @@ describe("real extension", () => {
     const shots = await makeOverlappingShots(scratch, 3);
     await scratch.close();
     photos = shots.map((jpeg, i) => ({ mediaKey: `AF1QipFAKE${i}000000000`, dedupKey: `dedupFAKE${i}0000`, takenAtMs: T0 + i * 3000, jpeg, width: 800, height: 600 }));
-    photos.push({ mediaKey: "AF1QipFAKELONE0000000", dedupKey: "dedupFAKELONE", takenAtMs: T0 + 86_400_000, jpeg: shots[0]!, width: 800, height: 600 });
+    photos.push({ mediaKey: "AF1QipFAKELONE0000000", dedupKey: "dedupFAKELONE", takenAtMs: T0 + 86_400_000, jpeg: withTakenDate(shots[0]!, "2024:07:15 09:00:00"), width: 400, height: 300, fileName: "2022-12-02 (3).jpg" });
     photos.push({ mediaKey: "AF1QipFAKEWRONGDATE00", dedupKey: "dedupFAKEWRONGDATE", takenAtMs: T0 + 2 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "IMG-20190512-WA0001.jpg" });
     photos.push({ mediaKey: "AF1QipFAKECUSTOM00000", dedupKey: "dedupFAKECUSTOM", takenAtMs: T0 + 3 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "HOLIDAY_12-05-2018_beach.jpg" });
     fake = new FakePhotos(photos);
@@ -151,13 +168,12 @@ describe("real extension", () => {
     expect(fake.renditions).toBe(before);
 
     // Paragraph: each thing looked for has its own tab, with its own results and actions.
-    expect(await frame.getByRole("tab").allInnerTexts()).toEqual(["Panoramas 1", expect.stringMatching(/^Wrong dates \d+$/)]);
+    // The first test made this panorama, so it is counted and not shown again.
+    expect(await frame.getByRole("tab").allInnerTexts()).toEqual(["Panoramas 0", expect.stringMatching(/^Wrong dates \d+$/)]);
     await frame.getByRole("tab", { name: /Panoramas/ }).click();
-    expect(await frame.locator(".cand").count()).toBe(1);
-    expect(await frame.locator(".cand .strip img").count()).toBe(3);
-    expect(await frame.locator(".cand-preview img").count()).toBe(1);
+    expect(await frame.locator(".cand").count()).toBe(0);
+    await frame.getByText("1 already made").waitFor();
     expect(await frame.locator(".date-rows").count()).toBe(0);
-    expect(await frame.locator("footer").count()).toBe(1);
     await frame.getByRole("tab", { name: /Wrong dates/ }).click();
     expect(await frame.locator(".cand").count()).toBe(0);
     expect(await frame.locator("footer").count()).toBe(0);
@@ -175,6 +191,401 @@ describe("real extension", () => {
     await running.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
     await running.getByRole("button", { name: "Close" }).click();
     await page.close();
+  });
+
+  it("lets each finding be chosen, even while the scan is still running", async () => {
+    // Paragraph: dates arrive first, while the panorama check is still going: they can be chosen, not yet fixed.
+    const { page, tabId } = await openPhotos();
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: true, dates: true, duplicates: false }, recheck: true } })).toMatchObject({ ok: true });
+    const frame = await scanFrame(page);
+    await frame.locator(".date-rows li").first().waitFor({ timeout: 60_000 });
+    expect(await frame.getByRole("button", { name: "Stop", exact: true }).count()).toBe(1);
+    const boxes = frame.locator(".date-rows input");
+    const total = await boxes.count();
+    expect(await boxes.first().isDisabled()).toBe(false);
+    await boxes.first().uncheck();
+    await frame.getByRole("button", { name: `Fix ${total - 1}` }).waitFor();
+    await boxes.first().check();
+    const fix = frame.getByRole("button", { name: /^Fix \d+$/ }); // the search for originals can add a row when the scan ends
+    expect(await frame.getByRole("button", { name: "Stop", exact: true }).count()).toBe(1); // still scanning, so this is why it waits
+    expect(await fix.isDisabled()).toBe(true);
+    await boxes.first().uncheck();
+
+    // Paragraph: the choice survives the end of the scan, and only then can it run.
+    await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
+    expect(await boxes.first().isChecked()).toBe(false);
+    await boxes.first().check();
+    expect(await fix.isDisabled()).toBe(false);
+
+    // Paragraph: one panorama can be chosen, by its box or its picture.
+    await frame.getByRole("tab", { name: /Panoramas/ }).click();
+    await frame.getByRole("button", { name: "None" }).click();
+    await frame.getByRole("button", { name: "Create 0" }).waitFor();
+    await frame.locator(".cand input[type=checkbox]").check();
+    await frame.getByRole("button", { name: "Create 1" }).waitFor();
+    await frame.locator(".cand-preview").click();
+    await frame.getByRole("button", { name: "Create 0" }).waitFor();
+    await frame.getByRole("button", { name: "Close" }).click();
+    await page.close();
+  });
+
+  it("edits a photo: brush, carry the picture to a service, paste the result, save as new", async () => {
+    // Paragraph: a stand-in AI site on this computer, whose own script takes a pasted picture like the real ones, and a page with no message box. Never a real site: routes do not catch every new window.
+    const standIn = `<title>site</title><form><div id="att"></div><div id="box" contenteditable="true" role="textbox" style="min-height:40px"></div><button id="go" type="submit" disabled>go</button></form><script>
+      window.got = { pasted: 0, sent: 0, text: null, type: null, size: 0 };
+      const update = () => { go.disabled = !(box.textContent.trim() && got.pasted); };
+      box.addEventListener("paste", (e) => { const f = e.clipboardData.files[0]; if (!f) return; e.preventDefault(); got.pasted++; got.type = f.type; got.size = f.size; const i = new Image(); i.src = URL.createObjectURL(f); att.append(i); update(); });
+      box.addEventListener("input", update);
+      document.querySelector("form").addEventListener("submit", (e) => { e.preventDefault(); got.sent++; got.text = box.textContent; box.textContent = ""; });
+    </script>`;
+    const sites = createServer((req, res) => {
+      res.setHeader("content-type", "text/html");
+      res.end(req.url === "/chat" ? standIn : "<title>sign in</title><h1>Sign in</h1>");
+    });
+    await new Promise<void>((resolve) => sites.listen(0, "127.0.0.1", resolve));
+    const siteAddress = `http://127.0.0.1:${(sites.address() as AddressInfo).port}`;
+    await sw.evaluate((address) => chrome.storage.local.set({ "pixlixir.aiServices.e2e@example.com": { chosen: null, engines: [], autoSend: true, added: [{ id: "chat", name: "Stand-in", url: `${address}/chat` }, { id: "nobox", name: "No box", url: `${address}/signin` }] } }), siteAddress);
+    type SiteState = { pasted: number; sent: number; text: string | null; type: string | null; size: number };
+    const opens = () => context.waitForEvent("page", (p) => p.url().startsWith(`${siteAddress}/chat`));
+    const status = () => editor.getByRole("dialog").locator(".pill, .error-box").evaluateAll((all) => all.map((e) => `${e.textContent} ${e.getAttribute("title") ?? ""}`).join(" | "));
+
+    // Paragraph: open Edit on one photo.
+    const { tabId } = await openPhotos();
+    const lone = photos.find((p) => p.mediaKey === "AF1QipFAKELONE0000000")!;
+    const opened = context.waitForEvent("page", (p) => p.url().includes("/edit.html"));
+    expect(await asExtensionPage({ type: "panel.openTool", tool: "edit", tabId, mediaKeys: [lone.mediaKey] })).toMatchObject({ ok: true });
+    const editor = await opened;
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await editor.bringToFront();
+
+    // Paragraph: Erase needs a brush; Send waits for one.
+    const frame = editor.locator(".edit-frame img");
+    await frame.waitFor({ timeout: 60_000 });
+    await editor.getByRole("combobox", { name: "Service" }).selectOption({ label: "Stand-in" });
+    const send = editor.getByRole("button", { name: "Send", exact: true });
+    expect(await send.isDisabled()).toBe(true);
+    const box = (await frame.boundingBox())!;
+    await editor.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await editor.mouse.down();
+    await editor.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55, { steps: 4 });
+    await editor.mouse.up();
+
+    // Paragraph: Send opens the site, and the picture and prompt arrive through the site's own handlers, then send is pressed, once.
+    const siteOpening = opens();
+    await send.click();
+    const site = await siteOpening;
+    const dialog = editor.getByRole("dialog");
+    await editor.bringToFront();
+    await expect.poll(status, { timeout: 45_000 }).toContain("Sent");
+    const got = await site.evaluate(() => (window as unknown as { got: SiteState }).got);
+    expect(got).toMatchObject({ pasted: 1, sent: 1, type: "image/png" });
+    expect(got.size).toBeGreaterThan(100);
+    expect(got.text).toContain("magenta");
+    expect(await editor.evaluate(async () => (await navigator.clipboard.read())[0]!.types)).toContain("image/png");
+    await dialog.getByRole("button", { name: "Copy prompt" }).click();
+    expect(await editor.evaluate(() => navigator.clipboard.readText())).toContain("magenta");
+    await site.close();
+
+    // Paragraph: with the option off, the box is filled and pressing send is left to the user.
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await editor.getByRole("checkbox", { name: "Send automatically" }).uncheck();
+    const fillOpening = opens();
+    await send.click();
+    const filled = await fillOpening;
+    await editor.bringToFront();
+    await expect.poll(status, { timeout: 45_000 }).toContain("Press Send there");
+    expect(await filled.evaluate(() => (window as unknown as { got: SiteState }).got)).toMatchObject({ pasted: 1, sent: 0 });
+    expect(await filled.evaluate(() => document.querySelector("#box")!.textContent)).toContain("magenta");
+    await filled.close();
+
+    // Paragraph: a page without a message box is reported, and the user carries on by hand.
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await editor.getByRole("combobox", { name: "Service" }).selectOption({ label: "No box" });
+    const signInOpening = context.waitForEvent("page", (p) => p.url().startsWith(`${siteAddress}/signin`));
+    await send.click();
+    const signIn = await signInOpening;
+    await editor.bringToFront();
+    await expect.poll(status, { timeout: 45_000 }).toContain("Paste it yourself");
+    await signIn.close();
+
+    // Paragraph: the picture sent has no EXIF, and shows the marking.
+    const sent = await editor.evaluate(async () => {
+      const img = document.querySelector<HTMLImageElement>(".edit-send img")!;
+      const blob = await (await fetch(img.src)).blob();
+      const bitmap = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(bitmap, 0, 0);
+      const d = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      let tinted = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i]! > d[i + 1]! + 40 && d[i + 2]! > d[i + 1]! + 40) tinted++;
+      return { type: blob.type, width: bitmap.width, height: bitmap.height, tinted, head: [...new Uint8Array(await blob.arrayBuffer())].slice(0, 4) };
+    });
+    expect(sent.type).toBe("image/png");
+    expect(sent.tinted).toBeGreaterThan(0);
+
+    // Paragraph: a result that is the sent picture, its marked area still magenta and everything else shifted to white, pasted back.
+    const result = await editor.evaluate(async (s) => {
+      const canvas = new OffscreenCanvas(s.width, s.height);
+      const ctx = canvas.getContext("2d")!;
+      const img = await createImageBitmap(await (await fetch(document.querySelector<HTMLImageElement>(".edit-send img")!.src)).blob());
+      ctx.drawImage(img, 0, 0);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = "rgb(30,30,30)"; // a redraw changes everything a little: only the brush may reach the photo
+      ctx.fillRect(0, 0, s.width, s.height);
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      const file = new File([blob], "result.png", { type: "image/png" });
+      const data = new DataTransfer();
+      data.items.add(file);
+      window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+      return blob.size;
+    }, sent);
+    expect(result).toBeGreaterThan(0);
+    await dialog.getByRole("button", { name: "Use", exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Use", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+
+    // Paragraph: saved as a new item, with the original's date.
+    const before = fake.uploads.length;
+    await editor.getByRole("button", { name: "Save as new" }).click();
+    const save = editor.getByRole("dialog");
+    await save.getByRole("button", { name: "Save", exact: true }).click();
+    await editor.locator("a.pill.ok", { hasText: "Saved" }).waitFor({ timeout: 60_000 });
+    expect(fake.uploads.length).toBe(before + 1);
+    expect(fake.uploads[before]!.fileName).toMatch(/_edit\.jpg$/);
+
+    // Paragraph: the saved file: same size, the brushed middle changed, the rest as it was.
+    const saved = jpeg.decode(fake.uploads[before]!.bytes), original = jpeg.decode(lone.jpeg);
+    expect([saved.width, saved.height]).toEqual([original.width, original.height]);
+    const difference = (fx: number, fy: number) => {
+      const x = Math.floor(saved.width * fx), y = Math.floor(saved.height * fy), k = (y * saved.width + x) * 4;
+      return Math.abs(saved.data[k]! - original.data[k]!) + Math.abs(saved.data[k + 1]! - original.data[k + 1]!) + Math.abs(saved.data[k + 2]! - original.data[k + 2]!);
+    };
+    expect(difference(0.52, 0.52)).toBeGreaterThan(30); // inside the brush
+    for (const [fx, fy] of [[0.05, 0.05], [0.95, 0.05], [0.05, 0.95], [0.95, 0.95], [0.5, 0.05], [0.05, 0.5]] as const) expect(difference(fx, fy)).toBeLessThan(15);
+    await editor.close();
+    sites.closeAllConnections();
+    await new Promise((resolve) => sites.close(resolve));
+  });
+
+  it("edits with a local engine and the built-in fixes, and records the edit", async () => {
+    // Paragraph: the user's engine: a real server on this computer, or a stand-in that answers with what it was given.
+    const posts: { image: string; mask: string; prompt: string; sd_strength: number }[] = [];
+    const modelInfos = [{ name: "lama", need_prompt: false, support_strength: false }, { name: "text-model", need_prompt: true, support_strength: true }];
+    let currentModel = "lama";
+    const switches: string[] = [];
+    const server = createServer((req, res) => {
+      // Paragraph: no CORS headers: the address's permission must be enough, so users need no extra server flags.
+      const reply = (value: unknown) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(value));
+      };
+      if (req.method === "GET" && req.url === "/api/v1/server-config") return reply({ modelInfos });
+      if (req.method === "GET" && req.url === "/api/v1/model") return reply({ name: currentModel });
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        if (req.url === "/api/v1/model") {
+          currentModel = (JSON.parse(Buffer.concat(chunks).toString()) as { name: string }).name;
+          switches.push(currentModel);
+          return reply({ name: currentModel });
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { image: string; mask: string; prompt: string; sd_strength: number };
+        posts.push(body);
+        res.setHeader("content-type", "image/png");
+        res.end(Buffer.from(body.image, "base64"));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = process.env.PIXLIXIR_IOPAINT ?? `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    // Paragraph: set up in Settings, for this account.
+    const settings = await context.newPage();
+    await settings.goto(`chrome-extension://${extensionId}/settings.html?email=e2e@example.com`);
+    const kinds = settings.getByRole("list", { name: "Supported engines" });
+    expect(await kinds.getByRole("link", { name: /SD\.Next/ }).getAttribute("href")).toBe("https://github.com/vladmandic/sdnext");
+    expect(await kinds.getByRole("link", { name: /IOPaint/ }).getAttribute("href")).toBe("https://github.com/Sanster/IOPaint");
+    expect(await kinds.getByText("IOPaint", { exact: true }).getAttribute("title")).toContain("POST /api/v1/inpaint");
+    await settings.getByRole("textbox", { name: "Engine name" }).fill("My engine");
+    await settings.getByRole("textbox", { name: "Engine address" }).fill(address);
+    await settings.getByRole("button", { name: "Add engine" }).click();
+    await settings.getByText("My engine").waitFor();
+    expect(await settings.getByRole("link", { name: "Open UI" }).first().getAttribute("href")).toBe(new URL(address).origin);
+
+    // Paragraph: commands for the chosen device, since an extension cannot start a program.
+    await settings.getByRole("textbox", { name: "Engine address" }).fill("http://127.0.0.1:8080");
+    await settings.getByText("iopaint start --model=lama --device=cuda --port=8080").waitFor();
+    await settings.getByRole("combobox", { name: "Device" }).selectOption("cpu");
+    await settings.getByText("iopaint start --model=lama --device=cpu --port=8080").waitFor();
+    await settings.getByRole("textbox", { name: "Model to run" }).fill("mat");
+    await settings.getByText("iopaint download --model=mat").waitFor();
+    await settings.getByRole("textbox", { name: "Model to run" }).fill("a b");
+    await settings.getByText("A model name has only").waitFor();
+    await settings.close();
+
+    // Paragraph: an engine that needs a brush waits for one.
+    const { tabId } = await openPhotos();
+    const lone = photos.find((p) => p.mediaKey === "AF1QipFAKELONE0000000")!;
+    const opened = context.waitForEvent("page", (p) => p.url().includes("/edit.html"));
+    expect(await asExtensionPage({ type: "panel.openTool", tool: "edit", tabId, mediaKeys: [lone.mediaKey] })).toMatchObject({ ok: true });
+    const editor = await opened;
+    await editor.bringToFront();
+    const frame = editor.locator(".edit-frame img");
+    await frame.waitFor({ timeout: 60_000 });
+    await editor.getByRole("combobox", { name: "Service" }).selectOption({ label: "My engine" });
+    const modelChoice = editor.getByRole("combobox", { name: "Model" });
+    await expect.poll(() => modelChoice.inputValue(), { timeout: 30_000 }).toBe("lama");
+    expect(await editor.getByRole("link", { name: "Open UI" }).getAttribute("href")).toBe(new URL(address).origin);
+
+    // Paragraph: a model that only fills a brushed area waits for one, whatever the text says.
+    await editor.getByRole("radio", { name: "Enhance" }).click();
+    const send = editor.getByRole("button", { name: "Send", exact: true });
+    await editor.getByText("Needs a brush").waitFor();
+    expect(await send.isDisabled()).toBe(true);
+
+    // Paragraph: on the real server, switching reaches it and comes back.
+    if (process.env.PIXLIXIR_IOPAINT) {
+      const serverModel = async () => ((await (await fetch(`${address}/api/v1/model`)).json()) as { name: string }).name;
+      await modelChoice.selectOption("cv2");
+      await expect.poll(serverModel, { timeout: 60_000 }).toBe("cv2");
+      await modelChoice.selectOption("lama");
+      await expect.poll(serverModel, { timeout: 60_000 }).toBe("lama");
+      await expect.poll(() => modelChoice.isDisabled(), { timeout: 60_000 }).toBe(false);
+    }
+
+    // Paragraph: a model that follows text needs none: it gets the whole picture to work on.
+    if (!process.env.PIXLIXIR_IOPAINT) {
+      await modelChoice.selectOption("text-model");
+      await expect.poll(() => switches.join()).toBe("text-model");
+      await expect.poll(() => send.isDisabled()).toBe(false);
+      await editor.getByRole("slider", { name: "Strength" }).fill("0.5");
+      await send.click();
+      await editor.getByRole("dialog").getByRole("button", { name: "Use", exact: true }).waitFor({ timeout: 30_000 });
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.prompt).toContain("Improve the light");
+      expect(posts[0]!.sd_strength).toBe(0.5);
+      const wholeMask = await editor.evaluate(async (b64) => {
+        const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+        const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+        ctx.drawImage(bitmap, 0, 0);
+        return ctx.getImageData(0, 0, bitmap.width, bitmap.height).data.every((v) => v === 255);
+      }, posts[0]!.mask);
+      expect(wholeMask).toBe(true);
+      await editor.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+      posts.length = 0;
+      await modelChoice.selectOption("lama");
+      await expect.poll(() => switches.join()).toBe("text-model,lama");
+    }
+    await editor.getByRole("radio", { name: "Erase" }).click();
+    const box = (await frame.boundingBox())!;
+    await editor.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await editor.mouse.down();
+    await editor.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55, { steps: 4 });
+    await editor.mouse.up();
+
+    // Paragraph: the brush can be resized, undone and deleted, and is drawn again afterwards.
+    const undoStroke = editor.getByRole("button", { name: "Undo stroke" });
+    await undoStroke.click();
+    expect(await undoStroke.isDisabled()).toBe(true);
+    await editor.getByRole("slider", { name: "Brush size" }).fill("0.06");
+    for (const offset of [0, 0.1]) {
+      await editor.mouse.move(box.x + box.width * (0.5 + offset), box.y + box.height * 0.5);
+      await editor.mouse.down();
+      await editor.mouse.move(box.x + box.width * (0.55 + offset), box.y + box.height * 0.55, { steps: 4 });
+      await editor.mouse.up();
+    }
+    await editor.getByRole("button", { name: "Delete brush" }).click();
+    expect(await undoStroke.isDisabled()).toBe(true);
+    await editor.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await editor.mouse.down();
+    await editor.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55, { steps: 4 });
+    await editor.mouse.up();
+    await send.click();
+
+    // Paragraph: the engine gets a clean picture and an exact mask of the same size, not the magenta marking.
+    const uploadsAtStart = fake.uploads.length;
+    const dialog = editor.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Use", exact: true }).waitFor({ timeout: process.env.PIXLIXIR_IOPAINT ? 300_000 : 30_000 });
+    if (!process.env.PIXLIXIR_IOPAINT) {
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.prompt).toContain("Remove it");
+      const seen = await editor.evaluate(async ({ image, mask }) => {
+        const shown = await (await fetch(document.querySelector<HTMLImageElement>(".edit-send img")!.src)).blob();
+        const decode = async (b64: string) => (await fetch(`data:image/png;base64,${b64}`)).blob();
+        const read = async (blob: Blob) => {
+          const bitmap = await createImageBitmap(blob);
+          const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+          ctx.drawImage(bitmap, 0, 0);
+          return { width: bitmap.width, height: bitmap.height, data: ctx.getImageData(0, 0, bitmap.width, bitmap.height).data };
+        };
+        const [picture, brush, marked] = await Promise.all([read(await decode(image)), read(await decode(mask)), read(shown)]);
+        let white = 0, other = 0, unmarkedUnderBrush = 0;
+        for (let i = 0; i < brush.data.length; i += 4) {
+          if (brush.data[i] === 255) {
+            white++;
+            if (Math.abs(picture.data[i]! - marked.data[i]!) + Math.abs(picture.data[i + 1]! - marked.data[i + 1]!) > 20) unmarkedUnderBrush++;
+          } else if (brush.data[i] !== 0) other++;
+        }
+        return { same: picture.width === brush.width && picture.height === brush.height, white, other, unmarkedUnderBrush };
+      }, posts[0]!);
+      expect(seen).toMatchObject({ same: true, other: 0 });
+      expect(seen.white).toBeGreaterThan(0);
+      expect(seen.unmarkedUnderBrush).toBeGreaterThan(seen.white * 0.5); // the marking was left out
+    }
+
+    // Paragraph: a result can be kept on this computer: full size, with the original's date details, and nothing uploaded.
+    const downloading = editor.waitForEvent("download");
+    await dialog.getByRole("button", { name: "Download" }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toMatch(/_edit\.jpg$/);
+    const kept = readFileSync(await download.path());
+    const keptSize = jpeg.decode(kept), sourceSize = jpeg.decode(lone.jpeg);
+    expect([keptSize.width, keptSize.height]).toEqual([sourceSize.width, sourceSize.height]);
+    expect(piexif.load(kept.toString("binary")).Exif[piexif.ExifIFD.DateTimeOriginal]).toBe("2024:07:15 09:00:00");
+    await dialog.getByRole("button", { name: "Use", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    expect(fake.uploads.length).toBe(uploadsAtStart); // a result reaches Google Photos only through Save
+
+    // Paragraph: the built-in fixes, on this computer: Done makes the next version, the same way up.
+    await editor.getByRole("button", { name: "Auto fix" }).click();
+    const panel = editor.getByRole("dialog", { name: "Auto fix" });
+    await panel.locator(".fx-canvas img").first().waitFor({ timeout: 60_000 });
+    await panel.getByRole("button", { name: "Done" }).click();
+    await panel.waitFor({ state: "detached", timeout: 60_000 });
+    await editor.getByRole("button", { name: "Undo edit" }).waitFor();
+    expect(fake.uploads.length).toBe(uploadsAtStart);
+
+    // Paragraph: saved, and recorded with what made it.
+    const before = fake.uploads.length;
+    await editor.getByRole("button", { name: "Save as new" }).click();
+    await editor.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
+    await editor.locator("a.pill.ok", { hasText: "Saved" }).waitFor({ timeout: 60_000 });
+    const saved = jpeg.decode(fake.uploads[before]!.bytes), original = jpeg.decode(lone.jpeg);
+    expect([saved.width, saved.height]).toEqual([original.width, original.height]);
+    const brightness = (img: { width: number; height: number; data: Uint8Array }, fx: number, fy: number) => img.data[(Math.floor(img.height * fy) * img.width + Math.floor(img.width * fx)) * 4 + 1]!;
+    const grid = [0.1, 0.3, 0.7, 0.9].flatMap((fx) => [0.1, 0.9].map((fy) => [fx, fy] as const));
+    const a = grid.map(([x, y]) => brightness(saved, x, y)), b = grid.map(([x, y]) => brightness(original, x, y));
+    const mean = (v: number[]) => v.reduce((s, x) => s + x, 0) / v.length;
+    const [ma, mb] = [mean(a), mean(b)];
+    const agreement = a.reduce((s, x, i) => s + (x - ma) * (b[i]! - mb), 0) / Math.sqrt(a.reduce((s, x) => s + (x - ma) ** 2, 0) * b.reduce((s, x) => s + (x - mb) ** 2, 0));
+    expect(agreement).toBeGreaterThan(0.8); // not flipped or turned
+    const job = await editor.evaluate(() => new Promise<{ kind: string; status: string; steps: { by: string }[]; saved: unknown }>((resolve, reject) => {
+      const open = indexedDB.open("pixlixir");
+      open.onerror = () => reject(new Error("no database"));
+      open.onsuccess = () => {
+        const all = open.result.transaction("jobs").objectStore("jobs").getAll();
+        all.onsuccess = () => {
+          const edits = (all.result as { kind: string; createdAt: number }[]).filter((j) => j.kind === "edit").sort((x, y) => y.createdAt - x.createdAt);
+          open.result.close();
+          resolve(edits[0] as never);
+        };
+      };
+    }));
+    expect(job).toMatchObject({ status: "done", steps: [{ by: "My engine" }, { by: "Auto fix" }] });
+    expect(job.saved).not.toBeNull();
+    await editor.close();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
   });
 
   it("refuses a scan frame that was not opened through the extension", async () => {
@@ -199,8 +610,17 @@ describe("real extension", () => {
     const settings = await context.newPage();
     await settings.goto(`chrome-extension://${extensionId}/settings.html?email=e2e@example.com`);
     await settings.getByRole("textbox", { name: "New format" }).fill("HOLIDAY_dd-mm-yyyy_*.*");
-    await settings.getByRole("button", { name: "Add" }).click();
+    await settings.getByRole("button", { name: "Add", exact: true }).click();
     await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").waitFor();
+
+    // Paragraph: added AI services stay with the account; an insecure address is refused.
+    await settings.getByRole("textbox", { name: "Service name" }).fill("My model");
+    await settings.getByRole("textbox", { name: "Service address" }).fill("http://example.test/");
+    await settings.getByRole("button", { name: "Add service" }).click();
+    await settings.getByText("The address must start with https://").waitFor();
+    await settings.getByRole("textbox", { name: "Service address" }).fill("https://example.test/model");
+    await settings.getByRole("button", { name: "Add service" }).click();
+    await settings.getByText("My model").waitFor();
     await settings.reload();
     await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").waitFor();
     await settings.goto(`chrome-extension://${extensionId}/settings.html?email=second@example.com`);
@@ -208,13 +628,26 @@ describe("real extension", () => {
     expect(await settings.getByText("HOLIDAY_dd-mm-yyyy_*.*").count()).toBe(0);
     await settings.close();
 
-    // Paragraph: only the date check, so no stitching. Both names are found, from different formats.
+    // Paragraph: only the date check, so no stitching. Both names are found, from different formats, and one saved copy apart from them.
+    const lone = photos.find((p) => p.mediaKey === "AF1QipFAKELONE0000000")!;
+    const loneBefore = lone.takenAtMs;
     const { page, tabId } = await openPhotos();
     expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: { panorama: false, dates: true, duplicates: false }, recheck: false } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
-    await frame.locator(".date-rows li").nth(1).waitFor({ timeout: 60_000 });
+    await frame.locator(".date-rows li").nth(2).waitFor({ timeout: 60_000 });
     await frame.getByRole("button", { name: "Scan again" }).waitFor();
-    expect(await frame.locator(".date-rows li").count()).toBe(2);
+    expect(await frame.locator(".date-rows:not(.copies) li").count()).toBe(2);
+    expect(await frame.locator(".date-rows.copies li").innerText()).toContain("2022-12-02 (3).jpg");
+    expect(await frame.locator(".date-rows.copies .row-help").getAttribute("title")).toContain("the file's own date is"); // read from the file, through the Photos tab
+    expect(await frame.locator(".date-rows:not(.copies) .row-help").first().getAttribute("title")).toContain("Fix writes the name's date");
+    expect(await frame.getByText("1 saved copy").count()).toBe(1);
+    expect(await frame.locator(".status-bar").innerText()).toContain("took "); // how long the scan took
+    await frame.locator(".date-rows.copies .date-original img").waitFor({ timeout: 60_000 }); // its original was looked for without being asked
+    expect(await frame.locator(".date-rows.copies .row-help").getAttribute("title")).toContain("likely original was taken");
+    expect(await frame.getByRole("button", { name: "Find originals" }).count()).toBe(0);
+    await frame.getByRole("button", { name: "None", exact: true }).click();
+    for (const box of await frame.locator(".date-rows:not(.copies) input[type=checkbox]").all()) await box.check();
+    await frame.getByRole("button", { name: "Fix 2" }).waitFor();
 
     // Paragraph: a date Google does not take stops the run and says so; the other was kept and is undoable.
     const wa = photos.find((p) => p.fileName?.startsWith("IMG-"))!;
@@ -234,6 +667,25 @@ describe("real extension", () => {
     await frame.getByRole("button", { name: "Undo" }).click();
     await frame.locator(".modal").getByRole("button", { name: "Put back" }).click();
     await expect.poll(() => wa.takenAtMs, { timeout: 30_000 }).toBe(waBefore);
+    expect(lone.takenAtMs).toBe(loneBefore);
+
+    // Paragraph: find the copy's original: its date and time zone can be taken, checked and undone.
+    const firstShot = photos[0]!;
+    await frame.getByRole("button", { name: "None", exact: true }).click();
+    await frame.getByRole("checkbox", { name: "Fix 2022-12-02 (3).jpg" }).check();
+    await frame.getByRole("button", { name: "Fix 1", exact: true }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Change dates" }).click();
+    await expect.poll(() => lone.takenAtMs, { timeout: 30_000 }).toBe(firstShot.takenAtMs);
+    await frame.locator(".modal").waitFor({ state: "detached" });
+    await frame.getByRole("button", { name: "Undo" }).waitFor();
+    await frame.getByRole("button", { name: "Undo" }).click();
+    await frame.locator(".modal").getByRole("button", { name: "Put back" }).click();
+    await expect.poll(() => lone.takenAtMs, { timeout: 30_000 }).toBe(loneBefore);
+
+    // Paragraph: the user can say a name really is the date taken.
+    await frame.getByRole("button", { name: "Use name" }).click();
+    expect(await frame.locator(".date-rows.copies").count()).toBe(0);
+    expect(await frame.locator(".date-rows li").count()).toBe(3);
     await frame.getByRole("button", { name: "Close" }).click();
     await page.close();
   });
@@ -257,7 +709,7 @@ describe("real extension", () => {
     await frame.locator(".date-rows li").first().waitFor({ timeout: 60_000 });
     await frame.getByRole("button", { name: "Scan again" }).waitFor();
     expect(await frame.locator(".date-rows li").count()).toBe(1);
-    expect(await frame.locator(".date-rows").innerText()).toContain("IMG-20190512-WA0001.jpg");
+    expect(await frame.locator(".date-rows").first().innerText()).toContain("IMG-20190512-WA0001.jpg");
     expect(await frame.locator(".cand").count()).toBe(0);
     expect(await frame.locator("h1").innerText()).toBe("Fix dates");
     // Mouse input does not reach a frame while the panel shares the window here; the other tests click it for real.
@@ -305,8 +757,17 @@ describe("real extension", () => {
     fake.trashed.clear();
     fake.calls.length = 0;
 
-    // Paragraph: the scan: make it again (it is marked already made, so it starts unticked).
+    // Paragraph: the scan does not show photos that already have a panorama, and says how many it left out.
     expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: false } })).toMatchObject({ ok: true });
+    const hiding = await scanFrame(page);
+    await hiding.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
+    await hiding.getByText("1 already made").waitFor();
+    expect(await hiding.locator(".cand").count()).toBe(0);
+    await hiding.getByRole("button", { name: "Close" }).click();
+
+    // Paragraph: Re-check all shows them again: make it again (it is marked already made, so it starts unticked).
+    await page.locator("iframe").waitFor({ state: "detached", timeout: 15_000 }).catch(() => {});
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: true } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
     await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
     await frame.locator(".cand input[type=checkbox]").check();
@@ -416,7 +877,7 @@ describe("real extension", () => {
     const { page, tabId } = await openPhotos();
     const uploadsBefore = fake.uploads.length;
     const pagesBefore = context.pages().length;
-    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: false } })).toMatchObject({ ok: true });
+    expect(await asExtensionPage({ type: "panel.openScan", tabId, plan: { scope: LIBRARY, detectors: panoramas, recheck: true } })).toMatchObject({ ok: true });
     const frame = await scanFrame(page);
     await frame.getByRole("button", { name: "Scan again" }).waitFor({ timeout: 120_000 });
 

@@ -163,6 +163,13 @@ class OverlapGrouper:
         detector = FeatureDetector("sift")
         features = [detector.detect_features(img) for img in small]
 
+        # Paragraph: a photo with too little detail can never reach MIN_INLIERS, and exactly one
+        # feature crashes the matcher (its nearest-neighbour search needs two), so it sits this out.
+        usable = [i for i, f in enumerate(features) if len(f.getKeypoints()) >= self.MIN_INLIERS]
+        keys, small, features = [keys[i] for i in usable], [small[i] for i in usable], [features[i] for i in usable]
+        if len(keys) < 2:
+            return {"groups": [], "pairs": 0}
+
         # Paragraph: all pairs for short sequences, capture-order neighbours for long ones.
         n = len(keys)
         range_width = -1 if n <= self.FULL_MATCH_LIMIT else self.RANGE_WIDTH
@@ -473,6 +480,8 @@ class PanoramaEngine:
         except StitchingError as err:
             return self._error(self._classify(str(err)), str(err))
         except cv.error as err:
+            if "knn" in str(err):
+                return self._error("NO_DETAIL", "One of these photos has almost no detail, such as a plain wall or sky. Leave it out and try again.")
             return self._error("OPENCV", f"OpenCV could not stitch these photos: {str(err).strip().splitlines()[-1]}")
         used = [keys[int(name) - 1] for name in stitcher.images.names]
         dropped = [k for k in keys if k not in used]

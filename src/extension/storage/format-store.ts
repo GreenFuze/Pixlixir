@@ -4,7 +4,7 @@ import { z } from "zod";
 import { FilenameFormat, FilenameFormats, type FilenameFormatEntry } from "../../scan/filename-format.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
 
-const Entries = z.array(z.object({ mask: z.string(), utc: z.boolean() }));
+const Entries = z.array(z.object({ mask: z.string(), utc: z.boolean(), saved: z.boolean().optional() }));
 
 export class FormatStore {
   static readonly PREFIX = "pixlixir.filenameFormats.";

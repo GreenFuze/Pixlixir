@@ -7,7 +7,8 @@ import type { LimitFunction } from "p-limit";
 import type { LibraryItem } from "../../domain/types.js";
 import { DEFAULT_STITCH_SETTINGS, type Motion } from "../../imaging/panorama/stitch-runtime.js";
 import { PanoramaPlausibility, type CandidatePreview, type OverlapChecker, type OverlapGroup } from "../../scan/panorama-detector.js";
-import { ErrorCode, PixError } from "../../shared/errors.js";
+import { ScanFailures } from "../../scan/scan-detector.js";
+import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import type { PanoramaWorkerClient } from "../editor/panorama/panorama-client.js";
 import type { PhotosGateway } from "../editor/photos-gateway.js";
 
@@ -27,25 +28,26 @@ export class EngineOverlapChecker implements OverlapChecker {
     private readonly shrink: (thumb: Blob) => Promise<Blob>,
   ) {}
 
-  async check(sequence: readonly LibraryItem[], signal: AbortSignal, onProgress: (fraction: number) => void): Promise<OverlapGroup[]> {
+  async check(sequence: readonly LibraryItem[], signal: AbortSignal, onProgress: (fraction: number) => void, onLeftOut: (error: SerializedError) => void = () => {}): Promise<OverlapGroup[]> {
     const keys = new Map<number, LibraryItem>();
     const thumbs = new Map<string, Blob>();
     try {
       // Paragraph: thumbnails into the engine. All of them settle first, so a failure leaves nothing still loading.
       const loads = await Promise.allSettled(sequence.map(async (item) => {
-        const blob = await this.downloads(() => {
-          if (signal.aborted) throw new PixError(ErrorCode.Cancelled, "The scan was stopped");
-          return this.gateway.thumbnail(item.baseUrl, EngineOverlapChecker.THUMB_SIDE);
-        });
+        const { blob, bitmap } = await this.thumbnail(item, signal);
         thumbs.set(item.mediaKey, blob);
-        const bitmap = await createImageBitmap(blob);
         const key = this.nextKey();
         keys.set(key, item);
         await this.worker.load(key, bitmap);
         onProgress(0.4 * (thumbs.size / sequence.length));
       }));
-      const failed = loads.find((l) => l.status === "rejected");
-      if (failed) throw failed.reason;
+
+      // Paragraph: a photo that cannot be read is left out and reported, unless too few are left or the problem would hit everything.
+      const failures = loads.flatMap((l) => (l.status === "rejected" ? [l.reason instanceof PixError ? l.reason : PixError.wrap(l.reason, ErrorCode.MediaFetchFailed, "Could not read a photo")] : []));
+      const stopping = failures.find((e) => ScanFailures.stopsTheScan(e));
+      if (stopping) throw stopping;
+      if (failures.length > 0 && keys.size < 2) throw failures[0];
+      for (const e of failures) onLeftOut(e.toJSON());
 
       // Paragraph: which photos overlap (keys in capture order).
       const ordered = [...keys.entries()].sort((a, b) => a[1].takenAtMs - b[1].takenAtMs).map(([k]) => k);
@@ -69,6 +71,25 @@ export class EngineOverlapChecker implements OverlapChecker {
     } finally {
       // Paragraph: free the engine's copies whatever happened.
       for (const k of keys.keys()) await this.worker.remove(k).catch((e: unknown) => console.error("[pixlixir] could not free a thumbnail", e));
+    }
+  }
+
+  /** A small image and its decoded form. One bad answer gets a second try, since the same photo usually reads at other sizes. */
+  private async thumbnail(item: LibraryItem, signal: AbortSignal): Promise<{ blob: Blob; bitmap: ImageBitmap }> {
+    const download = () => this.downloads(() => {
+      if (signal.aborted) throw new PixError(ErrorCode.Cancelled, "The scan was stopped");
+      return this.gateway.thumbnail(item.baseUrl, EngineOverlapChecker.THUMB_SIDE);
+    });
+    let blob = await download();
+    try {
+      return { blob, bitmap: await createImageBitmap(blob) };
+    } catch {
+      blob = await download();
+    }
+    try {
+      return { blob, bitmap: await createImageBitmap(blob) };
+    } catch (err) {
+      throw PixError.wrap(err, ErrorCode.MediaDecodeFailed, "A photo could not be read, so it was left out of the panorama check", { mediaKey: item.mediaKey, mimeType: blob.type, bytes: blob.size });
     }
   }
 

@@ -33,6 +33,8 @@ export interface DetectorStats {
   failures: SerializedError[];
   /** File names that match none of the account's formats. */
   unmatchedNames?: number;
+  /** Groups not shown because a panorama of them already exists. */
+  alreadyMade?: number;
 }
 
 export class ScanFailures {

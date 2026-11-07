@@ -9,7 +9,7 @@ export interface IconShape {
   attrs: Record<string, string | number>;
 }
 
-export type ToolIconId = "split" | "panorama" | "dates";
+export type ToolIconId = "split" | "panorama" | "dates" | "edit";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const INK = "#8b85a0";
@@ -54,6 +54,14 @@ export const TOOL_ICONS: Record<ToolIconId, IconShape[]> = {
     ...arrow(44),
     { tag: "rect", attrs: { x: 60, y: 11, width: 33, height: 18, rx: 1.5, fill: SKY } },
     { tag: "path", attrs: { d: "M60 29L68 18L74 24L81 16L93 27V29Z", fill: LAND } },
+  ],
+
+  // A photo with a brushed area -> the same photo with it gone.
+  edit: [
+    ...photo(3, 7, 34, 26),
+    { tag: "path", attrs: { d: "M12 15L27 25", stroke: "#ff00ff", "stroke-opacity": 0.7, "stroke-width": 5, "stroke-linecap": "round", fill: "none" } },
+    ...arrow(42),
+    ...photo(59, 7, 34, 26),
   ],
 
   // A file with a name -> a calendar with the right day ticked.

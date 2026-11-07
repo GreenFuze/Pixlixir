@@ -70,13 +70,13 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | ID | Feature | Phase | Status |
 |---|---|---|---|
 | S-01 | Editor workspace (large canvas, zoom/pan, before/after) | 3 | todo |
-| S-02 | Text-instruction editing | 3 | todo |
+| S-02 | Text-instruction editing: Pixlixir fills a service the user is signed in to on their click, and the user brings the result back (ADR-0009). Filling tested on a stand-in only | 3 | implemented |
 | S-03 | Iterative revisions + history (original → rev N), revert | 3 | todo |
-| S-04 | Brush modes: Remove / Add / Replace / Protect / Retouch (color-coded masks) | 3 | todo |
+| S-04 | Brush for the area to change, with buttons for Erase, Fix, Unblur, Enhance, Replace, Custom (ADR-0009). Protect and Retouch todo | 3 | partial |
 | S-05 | Brush controls: size, hardness/feather, opacity, eraser, add/subtract, undo/redo, mask visibility | 3 | todo |
 | S-06 | Combined brush + text instructions | 3 | todo |
-| S-07 | Capability-aware provider interface (orchestrator vs editor vs both) | 3 | todo |
-| S-08 | Providers: OpenAI images, Gemini image editing, local inpainting, OpenCV classical | 3 | todo |
+| S-07 | Service list: ChatGPT, Gemini, Grok, plus any the user adds by address; sign-in shown from cookie names (unverified). No API keys | 3 | implemented |
+| S-08 | Local engines the user configures (IOPaint, tested on a real server; Stable Diffusion WebUI, fake response only), and the Fix panel as Auto fix in Edit | 3 | implemented |
 | S-09 | Pre-flight disclosure: cost, local/cloud, privacy | 3 | todo |
 | S-10 | Save as new / download / replace (only if G-14 verified) | 3 | todo |
 | S-11 | Smart selections: people, faces, skin, teeth, eyes, hair, clothing, fg/bg, objects (editable) | 4 | todo |
@@ -130,7 +130,7 @@ offers a review and a bulk action. New checks are added as detectors.
 | ID | Feature | Phase | Status |
 |---|---|---|---|
 | L-01 | **Bulk operations** in the side panel: scope = date range, album, selection or whole library, and what to look for. Runs in a modal over Google Photos: progress bar with time left, minimize to the chip; findings stream in; review, select, bulk action, results + recent work | 4 | implemented |
-| L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart that overlap partially, agree once aligned and show clearly more than one photo (bursts rejected); only groups and photos that stitch are shown; preview and in-modal editor per group; "already made" recognised | 4 | implemented |
+| L-02 | Detector: **panorama candidates** — same-size photos taken ≤ 30 s apart that overlap partially, agree once aligned and show clearly more than one photo (bursts rejected); only groups and photos that stitch are shown; preview and in-modal editor per group; groups already made are left out and counted | 4 | implemented |
 | L-03 | Detector: **wrong dates from file names** implemented (M-01); time zones and missing location (M-03) todo | 4 | partial |
 | L-04 | Detector: **duplicates by looks** with a similarity the user chooses (ADR-0008) | 4 | implemented |
 | L-05 | Detector: album-page scans to split (R-01), HDR / focus brackets (C-04, C-05) | 4 | todo |
@@ -216,7 +216,7 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| P-01 | Research matrix: Magic Eraser, generative edit, Unblur, Best Take, Auto Frame, portrait, stabilization, video editor | 0 | research |
+| P-01 | Research matrix: Magic Eraser, generative edit, Unblur, Best Take, Auto Frame, portrait, stabilization, video editor. Native use from the web dropped by the owner (see MOBILE-PARITY) | 0 | research |
 | P-02 | Independent equivalents for features not legitimately accessible | 6 | todo |
 
 ## A — External AI & app integration (cross-cutting)

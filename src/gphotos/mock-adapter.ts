@@ -54,6 +54,13 @@ export class MockPhotosAdapter implements PhotosLibraryAdapter {
     return { bytes, mimeType: "image/jpeg" };
   }
 
+  async fetchFileHead(baseUrl: string): Promise<Uint8Array> {
+    const item = [...this.#items.values()].find((i) => i.baseUrl === baseUrl);
+    const bytes = item ? this.originals.get(item.ref.mediaKey) : undefined;
+    if (!bytes) throw new PixError(ErrorCode.MediaFetchFailed, "Mock original not registered", { baseUrl });
+    return bytes;
+  }
+
   async uploadPhoto(bytes: Uint8Array, fileName: string, options: UploadOptions): Promise<CreatedMediaItem> {
     if (this.#failNextUpload) {
       const err = this.#failNextUpload;

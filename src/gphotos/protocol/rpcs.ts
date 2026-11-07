@@ -226,9 +226,9 @@ export class PhotosRpc {
     });
   }
 
-  /** DaSgWe — set capture time (seconds) and timezone offset (seconds) on owned items. */
+  /** DaSgWe — set capture time (seconds) and timezone offset (seconds) on owned items. A time with milliseconds keeps its second: rounding up would change it. */
   async setTimestamps(items: readonly { dedupKey: string; takenAtMs: number; timezoneOffsetMs: number }[]): Promise<void> {
-    const payload = [items.map((i) => [i.dedupKey, Math.round(i.takenAtMs / 1000), Math.round(i.timezoneOffsetMs / 1000)])];
+    const payload = [items.map((i) => [i.dedupKey, Math.floor(i.takenAtMs / 1000), Math.floor(i.timezoneOffsetMs / 1000)])];
     await this.client.call(RpcId.setTimestamps, payload);
   }
 

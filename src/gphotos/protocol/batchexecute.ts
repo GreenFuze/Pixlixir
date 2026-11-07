@@ -73,7 +73,8 @@ export function parseBatchExecuteResponse(text: string, rpcId: string): unknown 
       if (!Array.isArray(entry) || entry[0] !== "wrb.fr" || entry[1] !== rpcId) continue;
       const inner = entry[2];
       if (typeof inner !== "string") {
-        throw new PixError(ErrorCode.RpcEnvelopeMissing, `Google Photos returned no data for ${rpcId} (the operation was rejected or its format changed).`, {
+        const code = entry[5] === undefined || entry[5] === null ? "" : ` Google's code: ${JSON.stringify(entry[5])}.`;
+        throw new PixError(ErrorCode.RpcEnvelopeMissing, `Google Photos returned no data for ${rpcId} (the operation was rejected or its format changed).${code}`, {
           rpcId,
           errorPart: entry[5] ?? null,
         });

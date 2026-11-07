@@ -26,6 +26,37 @@ add the formats they know (`IMG-20240328.jpg` is `IMG-yyyymmdd.*`), saved.
    before the first change; batches of 100 are read back, and a date that did not stick stops the
    run and says how many; Undo puts the run's dates back while the scan stays open.
 
+6. *A name's date may be when the file was saved, not taken.* The owner's 213 `2022-12-02(N).jpg`
+   copies were dated 2013 to 2022: one export day. `ExportDateGuard` marks findings that share a
+   name day when at least 5 of them have current dates at least 30 days apart. `SavedCopyName` marks
+   one file alone, since a selected photo has no group: a name that is only a date, with a copy
+   counter or at 1080 px or less. Marked files are listed apart as **saved copies**, never ticked:
+   their date can only come from the original. The scan then looks through the library for a
+   larger photo of the same shape and look, with the Duplicates rule and the same saved prints, and
+   shows each pair; a 100% pair is ticked, a looser one waits, and one with the same date says **Date
+   is right**. **Find originals** only appears to continue a search that was stopped or failed.
+   Every row has a **?** saying what was found: Google's date, the name's, the file's own, whether
+   Google already shows the file's own date, and what its original gives. **Fix** gives the copy the original's
+   date and time zone, read back and undoable. A place cannot be written to an existing item yet:
+   no such call is known. **Use name** moves a copy back if it is wrong. A format can also be marked
+   **Saved**, so its date is never suggested. Measured on the owner's second library
+   (108,148 items, 511 wrong dates over 64 name days, 2026-11-05, read-only): it flags those 213,
+   whose dates span 14.7 years, and nothing else; every other name day with 5 or more files spans under 7 days, so
+   the limits could move a lot without changing the result. That is one library, though. The guard
+   only stops trusting the name: the current dates may be wrong too (181 of the 213 share a minute).
+
+   **The file's own date comes first.** `FileDetailsReader` reads the start of each finding's file
+   (256 KB, the rest of the download dropped, cached): a date taken more than a day and a half from
+   the name's makes it a copy, whatever the name looks like, and one that agrees stops the name and
+   group rules from marking it. A file with no date falls to those rules, since WhatsApp and others
+   strip it even when the name is right. Measured on the owner's second library (2026-11-06, read-only,
+   counts only, with the default formats re-implemented in the probe): 267 findings, none unread.
+   All 213 known copies have a date taken and none has camera details; it is not the name's date on any
+   of them, and matches Google's date on 212. Of the 54 others, 53 are JPEGs with a date taken and 49
+   name a camera: 48 agree with the name, and 5 do not, which now makes them copies, unjudged by the
+   owner. The earlier count of 511 was not reproduced, and the reason is not known. The copies' own date
+   only shows the name is wrong: it does not prove the date right, since 181 of them share a minute.
+
 **Kept from Photo Date Fixer:** a date-only name changes the day and keeps the time of day; a name
 with a time counts as correct within 120 s; `PXL_` names are UTC; years before 1990 or after next
 year are not dates.

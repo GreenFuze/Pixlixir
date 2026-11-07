@@ -59,6 +59,10 @@ export class PhotosGateway {
     return new Blob([Base64.decode(r.bytesBase64) as Uint8Array<ArrayBuffer>], { type: r.mimeType });
   }
 
+  async fileHead(baseUrl: string): Promise<Uint8Array> {
+    return Base64.decode((await this.call({ type: "photos.fileHead", baseUrl })).bytesBase64);
+  }
+
   upload(req: UploadRequest): Promise<CreatedMediaItem> {
     return this.call({
       type: "photos.uploadPhoto",

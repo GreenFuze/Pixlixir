@@ -252,6 +252,8 @@ export class StitchRuntime {
         return "The photos matched, but their positions could not be worked out. If the camera moved across a flat subject, choose 'Moving over a flat surface'; otherwise try another projection or 'Try harder'.";
       case "CROP":
         return "The stitched photos leave no clean rectangle to crop to. Choose 'Fill edges' instead.";
+      case "NO_DETAIL":
+        return library;
       default:
         return `Stitching failed: ${library}`;
     }

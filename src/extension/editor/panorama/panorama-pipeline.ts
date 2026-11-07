@@ -150,7 +150,7 @@ export class PanoramaPublisher {
   async publish(image: Blob, fileName: string, inherited: InheritedMetadata, choices: PublishChoices): Promise<PublishedPanorama> {
     // Paragraph: upload (the date is set right after the commit).
     if (image.size > PanoramaPublisher.MAX_UPLOAD_BYTES) {
-      throw new PixError(ErrorCode.UploadFailed, "The panorama file is too large to upload from the browser. Choose a smaller output size.", { bytes: image.size, limit: PanoramaPublisher.MAX_UPLOAD_BYTES });
+      throw new PixError(ErrorCode.UploadFailed, "The file is too large to upload from the browser. Choose a smaller output size.", { bytes: image.size, limit: PanoramaPublisher.MAX_UPLOAD_BYTES });
     }
     const created = await this.gateway.upload({
       bytes: new Uint8Array(await image.arrayBuffer()),

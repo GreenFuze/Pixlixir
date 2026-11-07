@@ -20,6 +20,7 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
 
   /** Refuse to move absurdly large payloads through extension messaging. */
   static readonly MAX_ORIGINAL_BYTES = 60 * 1024 * 1024;
+  static readonly FILE_HEAD_BYTES = 256 * 1024;
 
   constructor(session: SessionContext, origin: string, sourcePath: () => string, fetchImpl: FetchLike) {
     this.account = session.account;
@@ -64,6 +65,39 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
     if (!blob.type.startsWith("image/")) throw new PixError(ErrorCode.MediaDecodeFailed, `Expected an image but received ${blob.type || "unknown content"}`);
     if (blob.size > LiveWebAdapter.MAX_ORIGINAL_BYTES) throw new PixError(ErrorCode.MediaFetchFailed, "This photo is too large for the browser-only editor.", { size: blob.size });
     return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+  }
+
+  async fetchFileHead(baseUrl: string): Promise<Uint8Array> {
+    if (!CONTENT_URL.test(baseUrl)) throw new PixError(ErrorCode.InvalidMessage, "Refused to read a file from an unexpected address.");
+    let res: Response;
+    try {
+      res = await this.#fetch(RenditionUrl.build(baseUrl, { kind: "original" }), { method: "GET", credentials: "include" });
+    } catch (err) {
+      throw PixError.wrap(err, ErrorCode.MediaFetchFailed, "Could not read a file");
+    }
+    if (!res.ok || !res.body) throw new PixError(ErrorCode.MediaFetchFailed, `Reading a file failed (HTTP ${res.status})`, { status: res.status });
+
+    // Paragraph: stop reading at the limit, and let the rest of the download go.
+    const reader = res.body.getReader();
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (size < LiveWebAdapter.FILE_HEAD_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+        size += value.length;
+      }
+    } finally {
+      await reader.cancel().catch((err: unknown) => console.error("[pixlixir] could not stop a download", err));
+    }
+    const head = new Uint8Array(size);
+    let at = 0;
+    for (const part of parts) {
+      head.set(part, at);
+      at += part.length;
+    }
+    return head;
   }
 
   async uploadPhoto(bytes: Uint8Array, fileName: string, options: UploadOptions): Promise<CreatedMediaItem> {

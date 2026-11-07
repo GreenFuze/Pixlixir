@@ -16,6 +16,8 @@ export interface FilenameFormatEntry {
   mask: string;
   /** The name's time is UTC (Pixel), not the time on the camera's clock. */
   utc: boolean;
+  /** The date in the name is when the file was saved or exported, not when the photo was taken. */
+  saved?: boolean | undefined;
 }
 
 /** A date read from a file name. localMs is its wall-clock time written as if it were UTC. */
@@ -24,6 +26,8 @@ export interface FilenameStamp {
   localMs: number;
   hasTime: boolean;
   utc: boolean;
+  /** Not a capture date: never suggested as one. */
+  saved: boolean;
 }
 
 interface MaskGroups {
@@ -77,7 +81,7 @@ export class FilenameFormat {
     const year = Number(groups.y);
     if (year < MIN_YEAR || year > nowYear + 1) return null;
     const localMs = FilenameFormat.wallClock(year, Number(groups.mo), Number(groups.d), Number(groups.h ?? 0), Number(groups.mi ?? 0), Number(groups.s ?? 0));
-    return localMs === null ? null : { mask: this.entry.mask, localMs, hasTime: this.hasTime, utc: this.entry.utc };
+    return localMs === null ? null : { mask: this.entry.mask, localMs, hasTime: this.hasTime, utc: this.entry.utc, saved: this.entry.saved === true };
   }
 
   /** A run touching another letter of the same case is part of a word ("Message", "SUMMER"). */

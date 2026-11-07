@@ -8,14 +8,15 @@
 
 import pLimit from "p-limit";
 import type { LibraryItem } from "../../domain/types.js";
+import { OriginalFinder, type LibraryLister, type OriginalMatch } from "../../scan/copy-originals.js";
 import { DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../scan/date-fix.js";
 import { DuplicateGrouper, DuplicatePlans, DuplicatesDetector, DuplicateSimilarity, DuplicateTrasher, type DuplicateGroup, type DuplicateIndex, type DuplicateMember, type PhotoPrint } from "../../scan/duplicates.js";
 import { FilenameFormats } from "../../scan/filename-format.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
 import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js";
-import { PanoramaDetector, ScanConcurrency, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
+import { PanoramaDetector, ScanConcurrency, type AlreadyMade, type PanoramaCandidate, type SavedSequence } from "../../scan/panorama-detector.js";
 import { ScanEta } from "../../scan/scan-eta.js";
-import type { DetectorId, ScanDetector } from "../../scan/scan-detector.js";
+import type { DetectorId, ScanContext, ScanDetector } from "../../scan/scan-detector.js";
 import type { ScanPlan } from "../../scan/scan-plan.js";
 import { ScanScopes } from "../../scan/scan-scope.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
@@ -55,6 +56,12 @@ export interface CandidateView {
 
 export interface DateFixView {
   finding: DateFixFinding;
+  /** The name holds the day it was saved, so it is never offered as the date taken. */
+  copy: boolean;
+  /** The larger photo this copy can take its date from, once searched for. */
+  original: { item: LibraryItem; similarity: number; thumbUrl: string | null } | null;
+  /** The search looked for this copy's original. */
+  searched: boolean;
   selected: boolean;
   fixed: boolean;
   thumbUrl: string | null;
@@ -81,6 +88,7 @@ export type ScanPhase =
   | { name: "review" }
   | { name: "creating"; done: number; total: number }
   | { name: "fixingDates"; done: number; total: number }
+  | { name: "findingOriginals"; step: string; done: number | null; total: number | null; secondsLeft: number | null }
   | { name: "trashing"; done: number; total: number }
   | { name: "failed"; error: SerializedError };
 
@@ -110,6 +118,59 @@ export interface ScanSnapshot {
   undoableDateFix: boolean;
   /** One group open in the Create-panorama editor, inside this modal. */
   editor: { candidateId: string; session: PanoramaSession } | null;
+  /** How long the last scan took, once it has ended. */
+  elapsedSeconds: number | null;
+}
+
+/** What a date row means, for its help and for what it can do. */
+export class DateFixRow {
+  /** Google stores whole seconds. */
+  private static readonly SAME_MS = 1000;
+
+  static sameDate(a: Pick<LibraryItem, "takenAtMs">, b: Pick<LibraryItem, "takenAtMs">): boolean {
+    return Math.abs(a.takenAtMs - b.takenAtMs) < DateFixRow.SAME_MS;
+  }
+
+  /** An original with the same date has nothing to give. */
+  static canTakeOriginal(d: Pick<DateFixView, "finding" | "original">): boolean {
+    return d.original !== null && !DateFixRow.sameDate(d.finding.item, d.original.item);
+  }
+
+  /** The row's (?): what was found, and why the row looks as it does. */
+  static help(d: Pick<DateFixView, "finding" | "copy" | "original" | "searched">, format: (ms: number, offsetMs: number) => string): string {
+    const { item, fileTakenLocalMs, copyReason, fileAgrees, fileName, newTakenAtMs, mask } = d.finding;
+    const lines: string[] = [];
+    const shown = format(item.takenAtMs, item.timezoneOffsetMs);
+    const inFile = fileTakenLocalMs === null ? null : format(fileTakenLocalMs, 0);
+
+    // Paragraph: a wrong date: what the name asks for, and how far the file backs it.
+    if (!d.copy) {
+      lines.push(`Google Photos says ${shown}, but the name ${fileName} says ${format(newTakenAtMs, item.timezoneOffsetMs)} (format ${mask}).`);
+      lines.push(fileAgrees && inFile ? `The file's own date, ${inFile}, agrees with the name, so the name is trusted.` : inFile ? `The file's own date is ${inFile}.` : "The file has no date of its own, so only the name says when it was taken.");
+      lines.push("Fix writes the name's date.");
+      return lines.join("\n");
+    }
+
+    // Paragraph: a saved copy: why the name is not trusted, and whether today's date already looks right.
+    lines.push(copyReason === "file" ? `The name holds the day this copy was saved, not taken: the file's own date is ${inFile ?? "another day"}.`
+      : copyReason === "group" ? "The name holds the day this copy was saved, not taken: many files share this name's day, while their dates are far apart."
+      : copyReason === "name" ? "The name holds the day this copy was saved, not taken: it is only a date, with a copy counter or at a size made for sharing."
+      : "You can treat this name as the date taken with Use name.");
+    if (inFile !== null && fileTakenLocalMs !== null && Math.abs(fileTakenLocalMs - (item.takenAtMs + item.timezoneOffsetMs)) < 60_000) {
+      lines.push(`Google Photos already shows the file's own date, ${shown}. That may be right, or the day a program stamped on it.`);
+    } else {
+      lines.push(`Google Photos says ${shown}.`);
+    }
+
+    // Paragraph: what the search for its original found.
+    if (d.original) {
+      const taken = format(d.original.item.takenAtMs, d.original.item.timezoneOffsetMs);
+      lines.push(DateFixRow.sameDate(item, d.original.item) ? `Its likely original has the same date, so there is nothing to fix.` : `Its likely original was taken ${taken}, ${d.original.similarity}% alike. Fix writes that date and time zone.`);
+    } else {
+      lines.push(d.searched ? "No larger photo of this picture was found, so nothing is changed." : "Not searched for its original yet.");
+    }
+    return lines.join("\n");
+  }
 }
 
 export class ScanSession extends EditorSession<ScanSnapshot> {
@@ -151,6 +212,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
       duplicates: null,
       undoableDateFix: false,
       editor: null,
+      elapsedSeconds: null,
     });
     this.#gateway = new PhotosGateway(params.email, params.tabId);
     this.#worker = new PanoramaWorkerClient((stage) => this.set({ progress: stage }));
@@ -214,10 +276,12 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   async startScan(): Promise<void> {
     // Paragraph: fresh state, chosen detectors.
     this.revokeAll();
-    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null, tab: null, duplicates: null, ...ScanSession.noDateFixes() });
+    this.set({ candidates: [], thumbs: {}, summary: null, scanError: null, tab: null, duplicates: null, elapsedSeconds: null, ...ScanSession.noDateFixes() });
     this.#dateJob = null;
     const ctrl = new AbortController();
     this.#scan = ctrl;
+    const started = Date.now();
+    const ended = () => ({ phase: { name: "review" as const }, progress: null, elapsedSeconds: (Date.now() - started) / 1000 });
     try {
       const scope = ScanScopes.validate(this.plan().scope);
       this.set({ scopeLabel: ScanScopes.describe(scope) });
@@ -226,38 +290,45 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
       // Paragraph: run; findings appear as they are found.
       this.set({ phase: { name: "scanning", step: "Starting", done: null, total: null, secondsLeft: null } });
-      let eta = new ScanEta();
-      let etaStep = "";
       const scanner = new LibraryScanner(new LibraryCatalog(this.#gateway), detectors);
-      const summary = await scanner.run(scope, {
-        signal: ctrl.signal,
-        progress: (step, done, total) => {
-          const counted = done !== undefined && total !== undefined;
-          if (step !== etaStep) {
-            eta = new ScanEta();
-            etaStep = step;
-          }
-          this.set({ phase: { name: "scanning", step, done: done ?? null, total: total ?? null, secondsLeft: counted ? eta.update(done, total, Date.now()) : null } });
-          this.reportActivity(counted && total > 0 ? `Scanning ${Math.floor((done / total) * 100)}%` : "Scanning…");
-        },
-      }, (finding) => {
+      const progress = this.timedProgress("scanning", "Scanning");
+      const summary = await scanner.run(scope, { signal: ctrl.signal, progress }, (finding) => {
         if (finding.detector === "dates") this.addDateFix(finding as DateFixFinding);
         else if (finding.detector === "duplicates") this.setDuplicates(finding as DuplicateIndex);
         else this.addCandidate(finding as PanoramaCandidate);
       });
-      this.set({ phase: { name: "review" }, summary, progress: null });
-      this.reportActivity("Scan results");
+      this.set({ summary, progress: null });
       void this.loadDateThumbs();
+
+      // Paragraph: saved copies are only useful with their originals, so looking for them is part of the scan.
+      this.disposeScanEngines();
+      await this.searchOriginals(ctrl.signal, progress, scope.kind === "library" ? scanner.listed : null);
+      this.set(ended());
+      this.reportActivity("Scan results");
     } catch (err) {
-      const e = EditorSession.toError(err, "The scan failed");
       // A stopped scan keeps what it found so far.
-      const found = this.snapshot.candidates.length > 0 || this.snapshot.dateFixes.length > 0;
-      this.set({ phase: { name: "review" }, scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON(), progress: null });
+      const e = EditorSession.toError(err, "The scan failed");
+      this.set({ ...ended(), scanError: e.code === ErrorCode.Cancelled ? null : e.toJSON() });
       this.reportActivity("Scan results");
     } finally {
       this.disposeScanEngines();
       this.#scan = null;
     }
+  }
+
+  /** Progress with time left, restarting the estimate at each new step. */
+  private timedProgress(name: "scanning" | "findingOriginals", activity: string): (step: string, done?: number, total?: number) => void {
+    let eta = new ScanEta();
+    let etaStep = "";
+    return (step, done, total) => {
+      const counted = done !== undefined && total !== undefined;
+      if (step !== etaStep) {
+        eta = new ScanEta();
+        etaStep = step;
+      }
+      this.set({ phase: { name, step, done: done ?? null, total: total ?? null, secondsLeft: counted ? eta.update(done, total, Date.now()) : null } });
+      this.reportActivity(counted && total > 0 ? `${activity} ${Math.floor((done / total) * 100)}%` : `${activity}…`);
+    };
   }
 
   private disposeScanEngines(): void {
@@ -275,7 +346,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
 
   private isRunning(): boolean {
     const { name } = this.snapshot.phase;
-    return name === "scanning" || name === "creating" || name === "fixingDates" || name === "trashing";
+    return name === "scanning" || name === "creating" || name === "fixingDates" || name === "findingOriginals" || name === "trashing";
   }
 
   /** Cheap checks first, so their findings appear before the stitching engine starts. */
@@ -285,11 +356,12 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const detectors: ScanDetector[] = [];
     if (chosen.dates) {
       const formats = new FilenameFormats(await new FormatStore(params.email).load());
-      detectors.push(new FilenameDateDetector(this.#gateway, formats, this.results().cache<string>(params.email, "dates")) as ScanDetector);
+      detectors.push(new FilenameDateDetector(this.#gateway, formats, this.results().cache<string>(params.email, "dates"), this.#gateway) as ScanDetector);
     }
     if (chosen.duplicates) {
       const prints = this.results().cache<PhotoPrint>(params.email, "duplicates");
-      detectors.push(new DuplicatesDetector(new CanvasPhotoPrinter(this.#gateway), this.#gateway, prints, recheck) as ScanDetector);
+      const details = this.results().cache<Uint8Array>(params.email, "duplicates");
+      detectors.push(new DuplicatesDetector(new CanvasPhotoPrinter(this.#gateway), this.#gateway, prints, details, recheck) as ScanDetector);
     }
     if (chosen.panorama) {
       const saved = await this.store().savedPanoramas(params.email);
@@ -390,11 +462,68 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   }
 
   selectAllDateFixes(selected: boolean): void {
-    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.fixed ? d : { ...d, selected })) });
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.fixed || (d.copy && !DateFixRow.canTakeOriginal(d)) ? d : { ...d, selected })) });
   }
 
   selectedDateFixes(): number {
     return this.snapshot.dateFixes.filter((d) => d.selected && !d.fixed).length;
+  }
+
+  /** The user says this name really is the date taken. */
+  treatAsWrongDate(mediaKey: string): void {
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.finding.item.mediaKey === mediaKey ? { ...d, copy: false, original: null, selected: true } : d)) });
+  }
+
+  /** Continues a search that was stopped or failed. */
+  async findOriginals(): Promise<void> {
+    const ctrl = new AbortController();
+    this.#scan = ctrl;
+    this.set({ phase: { name: "findingOriginals", step: "Listing the library", done: null, total: null, secondsLeft: null } });
+    try {
+      await this.searchOriginals(ctrl.signal, this.timedProgress("findingOriginals", "Finding originals"), null);
+    } finally {
+      this.#scan = null;
+      this.set({ phase: { name: "review" } });
+      this.reportActivity("Scan results");
+    }
+  }
+
+  /**
+   * Looks through the library for the larger photo each saved copy came from. Prints are shared with
+   * Duplicates, and saved as it goes. Being stopped or failing costs this search, never the scan's results.
+   */
+  private async searchOriginals(signal: AbortSignal, progress: ScanContext["progress"], library: readonly LibraryItem[] | null): Promise<void> {
+    const copies = this.snapshot.dateFixes.filter((d) => d.copy && !d.fixed).map((d) => d.finding.item);
+    if (copies.length === 0) return;
+    this.set({ dateFixError: null });
+    try {
+      const { email } = this.snapshot.params;
+      const lister: LibraryLister = library ? { collect: async () => [...library] } : new LibraryCatalog(this.#gateway);
+      const finder = new OriginalFinder(new CanvasPhotoPrinter(this.#gateway), this.results().cache<PhotoPrint>(email, "duplicates"), this.results().cache<Uint8Array>(email, "duplicates"), lister);
+      const { unreadable } = await finder.run(copies, { signal, progress }, (match) => this.addOriginal(match));
+      const looked = new Set(copies.map((c) => c.mediaKey));
+      this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (looked.has(d.finding.item.mediaKey) ? { ...d, searched: true } : d)) });
+      if (unreadable > 0) this.set({ dateFixError: new PixError(ErrorCode.MediaFetchFailed, `${unreadable.toLocaleString()} photo${unreadable === 1 ? "" : "s"} could not be read, so an original may have been missed`, { unreadable }).toJSON() });
+    } catch (err) {
+      const e = EditorSession.toError(err, "Could not look for the originals");
+      if (e.code !== ErrorCode.Cancelled) this.set({ dateFixError: e.toJSON() });
+    }
+  }
+
+  /** A pair the same at any size is ticked; a looser one waits for the user to look. */
+  private addOriginal(match: OriginalMatch): void {
+    const key = match.copy.mediaKey;
+    const sameDate = DateFixRow.sameDate(match.copy, match.original);
+    this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.finding.item.mediaKey === key ? { ...d, original: { item: match.original, similarity: match.similarity, thumbUrl: null }, selected: match.similarity === 100 && !sameDate } : d)) });
+    void this.#gateway.thumbnail(match.original.baseUrl, ScanSession.DATE_THUMB_SIDE).then((blob) => {
+      const url = URL.createObjectURL(blob);
+      this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (d.finding.item.mediaKey === key && d.original ? { ...d, original: { ...d.original, thumbUrl: url } } : d)) });
+    }, (err: unknown) => console.error("[pixlixir] no thumbnail for an original", err));
+  }
+
+  /** What a row would write: its name's date, or for a copy its original's date and time zone. */
+  private static dateTarget(d: DateFixView): { takenAtMs: number; timezoneOffsetMs: number } {
+    return d.original ? { takenAtMs: d.original.item.takenAtMs, timezoneOffsetMs: d.original.item.timezoneOffsetMs } : { takenAtMs: d.finding.newTakenAtMs, timezoneOffsetMs: d.finding.item.timezoneOffsetMs };
   }
 
   showMoreDateFixes(): void {
@@ -410,12 +539,15 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const now = Date.now();
     let job: DateFixJob = await this.store().put<DateFixJob>({
       id: crypto.randomUUID(), kind: "dateFix", accountEmail: this.snapshot.params.email, sourceMediaKey: views[0]!.finding.item.mediaKey, status: "saving", error: null, createdAt: now, updatedAt: now,
-      changes: views.map(({ finding: f }) => ({ mediaKey: f.item.mediaKey, dedupKey: f.item.dedupKey, fileName: f.fileName, oldTakenAtMs: f.item.takenAtMs, newTakenAtMs: f.newTakenAtMs, timezoneOffsetMs: f.item.timezoneOffsetMs, applied: false })),
+      changes: views.map((d) => {
+        const f = d.finding, target = ScanSession.dateTarget(d);
+        return { mediaKey: f.item.mediaKey, dedupKey: f.item.dedupKey, fileName: f.fileName, oldTakenAtMs: f.item.takenAtMs, newTakenAtMs: target.takenAtMs, timezoneOffsetMs: target.timezoneOffsetMs, oldTimezoneOffsetMs: f.item.timezoneOffsetMs, applied: false };
+      }),
     });
     this.#dateJob = job;
 
     // Paragraph: write and read back, batch by batch.
-    const planned: PlannedDate[] = job.changes.map((c) => ({ mediaKey: c.mediaKey, dedupKey: c.dedupKey, takenAtMs: c.newTakenAtMs, timezoneOffsetMs: c.timezoneOffsetMs }));
+    const planned: PlannedDate[] = job.changes.map((c) => ({ mediaKey: c.mediaKey, fileName: c.fileName, dedupKey: c.dedupKey, takenAtMs: c.newTakenAtMs, timezoneOffsetMs: c.timezoneOffsetMs }));
     const applied = new Set<string>();
     this.#stopCreating = false;
     this.set({ dateFixError: null, phase: { name: "fixingDates", done: 0, total: planned.length } });
@@ -444,7 +576,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     const original = this.#dateJob;
     if (!original) return;
     const done = original.changes.filter((c) => c.applied);
-    const planned: PlannedDate[] = done.map((c) => ({ mediaKey: c.mediaKey, dedupKey: c.dedupKey, takenAtMs: c.oldTakenAtMs, timezoneOffsetMs: c.timezoneOffsetMs }));
+    const planned: PlannedDate[] = done.map((c) => ({ mediaKey: c.mediaKey, fileName: c.fileName, dedupKey: c.dedupKey, takenAtMs: c.oldTakenAtMs, timezoneOffsetMs: c.oldTimezoneOffsetMs ?? c.timezoneOffsetMs }));
     const restored = new Set<string>();
     this.#stopCreating = false;
     this.set({ dateFixError: null, phase: { name: "fixingDates", done: 0, total: planned.length } });
@@ -468,7 +600,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   }
 
   private addDateFix(finding: DateFixFinding): void {
-    this.set({ dateFixes: [...this.snapshot.dateFixes, { finding, selected: true, fixed: false, thumbUrl: null }], tab: this.snapshot.tab ?? "dates" });
+    this.set({ dateFixes: [...this.snapshot.dateFixes, { finding, copy: finding.exportDate, original: null, searched: false, selected: !finding.exportDate, fixed: false, thumbUrl: null }], tab: this.snapshot.tab ?? "dates" });
   }
 
   private markDatesFixed(mediaKeys: ReadonlySet<string>, fixed: boolean): void {
@@ -728,22 +860,22 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
   private revokeAll(): void {
     for (const c of this.snapshot.candidates) URL.revokeObjectURL(c.previewUrl);
     for (const url of Object.values(this.snapshot.thumbs)) URL.revokeObjectURL(url);
-    for (const d of this.snapshot.dateFixes) if (d.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+    for (const d of this.snapshot.dateFixes) for (const url of [d.thumbUrl, d.original?.thumbUrl]) if (url) URL.revokeObjectURL(url);
     for (const url of Object.values(this.snapshot.duplicates?.thumbs ?? {})) URL.revokeObjectURL(url);
   }
 
   /**
-   * A saved panorama counts as "already made" when it used at least half of these photos.
-   * Compared by dedup key (album listings use album-specific media keys); jobs saved
-   * before dedup keys were recorded are compared by media key.
+   * A saved panorama counts as "already made" when it used at least half of these photos, and covers
+   * them when it used more. Compared by dedup key (album listings use album-specific media keys);
+   * jobs saved before dedup keys were recorded are compared by media key.
    */
-  static alreadyMade(saved: readonly PanoramaJob[], items: readonly LibraryItem[]): { webUrl: string } | null {
+  static alreadyMade(saved: readonly PanoramaJob[], items: readonly LibraryItem[]): AlreadyMade | null {
     for (const job of saved) {
       if (!job.saved) continue;
       const byDedup = job.usedDedupKeys !== undefined && job.usedDedupKeys.length > 0;
       const used = new Set(byDedup ? job.usedDedupKeys : job.usedMediaKeys.length > 0 ? job.usedMediaKeys : job.sourceMediaKeys);
       const shared = items.filter((i) => used.has(byDedup ? i.dedupKey : i.mediaKey)).length;
-      if (shared * 2 >= items.length) return { webUrl: job.saved.webUrl };
+      if (shared * 2 >= items.length) return { webUrl: job.saved.webUrl, covers: shared * 2 > items.length };
     }
     return null;
   }

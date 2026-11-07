@@ -50,8 +50,14 @@ export class ResumableUploader {
       throw new PixError(ErrorCode.UploadFailed, "Upload did not finalize.", { step: "finalize", uploadStatus: status, tokenLength: token.length });
     }
 
-    // Paragraph: commit the token as a library item.
-    return this.rpc.commitUpload(token, fileName, Date.now());
+    // Paragraph: commit the token as a library item. Google can refuse here, after taking the bytes.
+    try {
+      return await this.rpc.commitUpload(token, fileName, Date.now());
+    } catch (err) {
+      if (!(err instanceof PixError) || err.code !== ErrorCode.RpcEnvelopeMissing) throw err;
+      const code = err.details?.errorPart ?? null;
+      throw new PixError(ErrorCode.UploadFailed, `Google Photos refused the uploaded file${code === null ? "" : ` (its code: ${JSON.stringify(code)})`}. Nothing was added.`, { step: "commit", fileName, bytes: bytes.byteLength, errorPart: code }, { cause: err });
+    }
   }
 
   private async send(url: string, headers: Record<string, string>, body: BodyInit, step: string): Promise<Response> {

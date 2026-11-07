@@ -21,12 +21,14 @@ few seconds apart). Test data you create can be deleted afterwards.
    undone is kept instead: close it first.
 
 **Scan again** repeats the same scan: earlier groups appear at once and the status shows "N already
-checked"; only new photos are checked. **Re-check all** in the panel ignores saved results.
+checked" and how long it took; only new photos are checked. A photo that cannot be read is left out,
+named with **Open ↗**, and tried again by the next scan. **Re-check all** in the panel ignores saved results.
 
 ## Review
 9. Each group shows a preview, the photos in it and the date. Only photos that stitched are shown:
-   bursts, retakes and photos that do not connect never appear. Groups Pixlixir already made show
-   **Already made ↗** and are unticked. No groups at all is a valid answer for many libraries; to
+   bursts, retakes and photos that do not connect never appear. Groups Pixlixir already made are left
+   out and counted as **N already made**; **Re-check all** shows them again, unticked, with **Already
+   made ↗**. A group sharing only half its photos with a panorama stays, marked the same way. No groups at all is a valid answer for many libraries; to
    see one, photograph a scene in 3 overlapping shots while turning, then scan that date.
 10. **Edit…** opens the group in Create panorama inside the modal. **← Back** or Escape returns to
     the results without saving; **Save to Google Photos** saves it, and the group then shows **Created**.

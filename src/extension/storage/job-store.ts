@@ -81,6 +81,8 @@ export interface DateFixRecord {
   oldTakenAtMs: number;
   newTakenAtMs: number;
   timezoneOffsetMs: number;
+  /** When the run changes the time zone too, as when a date comes from an original. */
+  oldTimezoneOffsetMs?: number;
   applied: boolean;
 }
 
@@ -111,7 +113,28 @@ export interface DuplicateTrashJob {
   updatedAt: number;
 }
 
-export type PixJob = SplitJob | PanoramaJob | DateFixJob | DuplicateTrashJob;
+/** One change in an Edit session: what made it, and what it was asked. */
+export interface EditStep {
+  by: string;
+  prompt: string | null;
+}
+
+/** A photo saved from Edit. Written before the upload. */
+export interface EditJob {
+  id: string;
+  kind: "edit";
+  accountEmail: string;
+  sourceMediaKey: string;
+  sourceFileName: string | null;
+  steps: EditStep[];
+  status: "saving" | "done" | "failed";
+  saved: { mediaKey: string; webUrl: string; fileName: string } | null;
+  error: SerializedError | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PixJob = SplitJob | PanoramaJob | DateFixJob | DuplicateTrashJob | EditJob;
 
 interface PixDb extends DBSchema {
   jobs: { key: string; value: PixJob; indexes: { bySource: [string, string]; byUpdated: number } };

@@ -3,6 +3,7 @@
  * New checks are added as detectors (scan-detector.ts); the listing is shared by all of them.
  */
 
+import type { LibraryItem } from "../domain/types.js";
 import type { SerializedError } from "../shared/errors.js";
 import type { LibraryCatalog } from "./library-catalog.js";
 import type { ScanContext, ScanDetector, ScanFinding } from "./scan-detector.js";
@@ -14,11 +15,16 @@ export interface ScanSummary {
   findings: number;
   photosReused: number;
   unmatchedNames: number;
+  /** Panorama groups not shown because they were already made. */
+  alreadyMade: number;
   failures: SerializedError[];
   seconds: number;
 }
 
 export class LibraryScanner {
+  /** What the last run listed, so a later step need not list it again. */
+  listed: readonly LibraryItem[] = [];
+
   constructor(
     private readonly catalog: LibraryCatalog,
     private readonly detectors: readonly ScanDetector[],
@@ -31,11 +37,13 @@ export class LibraryScanner {
     ScanScopes.validate(scope);
     ctx.progress("Listing photos");
     const items = await this.catalog.collect(scope, (count) => ctx.progress(`Listing photos · ${count.toLocaleString()} found`), ctx.signal);
+    this.listed = items;
 
     // Paragraph: each detector looks at the same items.
     let findings = 0;
     let photosReused = 0;
     let unmatchedNames = 0;
+    let alreadyMade = 0;
     const failures: SerializedError[] = [];
     for (const detector of this.detectors) {
       const stats = await detector.analyze(items, ctx, (f) => {
@@ -44,8 +52,9 @@ export class LibraryScanner {
       });
       photosReused = Math.max(photosReused, stats.photosReused); // detectors look at the same photos: never count one twice
       unmatchedNames += stats.unmatchedNames ?? 0;
+      alreadyMade += stats.alreadyMade ?? 0;
       failures.push(...stats.failures);
     }
-    return { itemsListed: items.length, photos: items.filter((i) => i.type === "photo").length, findings, photosReused, unmatchedNames, failures, seconds: Math.round((Date.now() - started) / 100) / 10 };
+    return { itemsListed: items.length, photos: items.filter((i) => i.type === "photo").length, findings, photosReused, unmatchedNames, alreadyMade, failures, seconds: Math.round((Date.now() - started) / 100) / 10 };
   }
 }

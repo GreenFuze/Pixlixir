@@ -163,6 +163,14 @@ function App(props: { model: PanelModel }) {
                   </li>
                 );
               }
+              if (j.kind === "edit") {
+                return (
+                  <li key={j.id}>
+                    <div title={j.steps.map((s) => s.prompt ? `${s.by}: ${s.prompt}` : s.by).join("\n")}>Edit of {j.sourceFileName ?? "a photo"}</div>
+                    <div class="muted small">{j.saved ? <a href={j.saved.webUrl} target="_blank" rel="noreferrer">open ↗</a> : "not saved"} · {status}</div>
+                  </li>
+                );
+              }
               const saved = j.prints.filter((p) => p.saved).length;
               return (
                 <li key={j.id}>

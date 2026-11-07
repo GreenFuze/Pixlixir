@@ -181,6 +181,24 @@ describe("bulk item info and date changes", () => {
     await expect(adapter.readItemInfo([KEY])).rejects.toBeInstanceOf(PixError);
   });
 
+  it("says Google's code when it refuses an uploaded file, and that nothing was added", async () => {
+    const { fetch } = fakeFetch((url, init) => {
+      const h = new Headers(init.headers);
+      if (url.includes("/_/upload/") && h.get("X-Goog-Upload-Command") === "start") return new Response("", { headers: { "x-goog-upload-url": "/_/upload/x?upload_id=FAKE" } });
+      if (url.includes("/_/upload/")) return new Response("TOKEN", { headers: { "x-goog-upload-status": "final" } });
+      return new Response(`)]}'\n\n99\n${JSON.stringify([["wrb.fr", "mdpdU", null, null, null, [3], "generic"]])}\n`);
+    });
+    const run = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch).uploadPhoto(new Uint8Array([1, 2, 3]), "x_panorama.jpg", {});
+    await expect(run).rejects.toMatchObject({ code: ErrorCode.UploadFailed, message: "Google Photos refused the uploaded file (its code: [3]). Nothing was added.", details: { step: "commit", fileName: "x_panorama.jpg", bytes: 3, errorPart: [3] } });
+  });
+
+  it("keeps a time's second when it has milliseconds, so it reads back as written", async () => {
+    const { fetch, calls } = rpcs({ DaSgWe: [] });
+    await new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch).setDates([{ dedupKey: DEDUP, takenAtMs: 1_700_000_000_789, timezoneOffsetMs: 0 }]);
+    const form = new URLSearchParams(String(calls[0]!.init.body));
+    expect(JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string)).toEqual([[[DEDUP, 1_700_000_000, 0]]]);
+  });
+
   it("writes dates through DaSgWe in seconds, by dedup key", async () => {
     const { fetch, calls } = rpcs({ DaSgWe: [] });
     const adapter = new LiveWebAdapter(session(), "https://photos.google.com", () => "/", fetch);

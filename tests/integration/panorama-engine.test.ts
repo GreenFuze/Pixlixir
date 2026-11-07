@@ -24,6 +24,21 @@ function assets() {
   };
 }
 
+/** A plain photo with one faint, soft, tilted spot: next to no detail, the case that crashed the matcher. */
+class PlainPhoto {
+  static withSpot(amplitude: number): RgbaImage {
+    const [width, height, base, sx, sy, cx, cy, theta] = [577, 433, 146, 29.78, 38.29, 181.2, 268.9, 2.186] as const;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const xr = (x - cx) * Math.cos(theta) + (y - cy) * Math.sin(theta);
+      const yr = -(x - cx) * Math.sin(theta) + (y - cy) * Math.cos(theta);
+      const v = base + amplitude * Math.exp(-((xr * xr) / (2 * sx * sx) + (yr * yr) / (2 * sy * sy)));
+      data.set([v, v, v, 255], (y * width + x) * 4);
+    }
+    return { width, height, data };
+  }
+}
+
 describe("panorama engine (Pyodide + OpenCV)", () => {
   let runtime: StitchRuntime;
   const stages: string[] = [];
@@ -134,6 +149,53 @@ describe("panorama engine (Pyodide + OpenCV)", () => {
       }
     }
     expect(runtime.findGroups(load(moved, 220)).groups).toEqual([]);
+  }, 120_000);
+
+  it("is not stopped by a photo with no detail: it just cannot be part of a panorama", () => {
+    // Paragraph: seen on a real library: a solid image in a sequence crashed the matcher, and five in a row stopped the scan.
+    const scene = SyntheticScene.textured(1500, 700, 11);
+    const views = SyntheticScene.windows(scene, [0, 420, 840], 0, 660, 700);
+    const blank = { width: 660, height: 700, data: new Uint8ClampedArray(660 * 700 * 4).fill(128) };
+    const load = (imgs: RgbaImage[], first: number) => imgs.map((v, i) => { runtime.setImage(first + i, v.data, v.width, v.height); return first + i; });
+
+    expect(runtime.findGroups(load([views[0]!, blank, views[1]!, views[2]!], 300)).groups).toEqual([{ keys: [300, 302, 303], duplicates: [] }]);
+    expect(runtime.findGroups(load([blank, blank], 310)).groups).toEqual([]);
+    expect(runtime.findGroups(load([blank, views[0]!], 320)).groups).toEqual([]);
+
+    // Paragraph: the crash needs exactly one feature: one faint soft spot on a plain photo (found by search, measured in OpenCV 4.11).
+    for (const [n, amp] of [26, 28, 30, 32, 34, 36].entries()) {
+      const spot = PlainPhoto.withSpot(amp);
+      expect(runtime.findGroups(load([spot, views[0]!, spot], 340 + n * 5)).groups).toEqual([]);
+    }
+    expect(runtime.findGroups(load([PlainPhoto.withSpot(32), PlainPhoto.withSpot(32)], 380)).groups).toEqual([]);
+  }, 120_000);
+
+  it("a photo with next to no detail in a chosen set is left out or explained, never an OpenCV error", () => {
+    const scene = SyntheticScene.textured(1500, 700, 13);
+    const views = SyntheticScene.windows(scene, [0, 420, 840], 0, 660, 700);
+    const blank = { width: 660, height: 700, data: new Uint8ClampedArray(660 * 700 * 4).fill(128) };
+    [views[0]!, blank, views[1]!, views[2]!].forEach((v, i) => runtime.setImage(330 + i, v.data, v.width, v.height));
+    for (const amp of [26, 28, 30, 32, 34, 36]) {
+      const [a, b] = [views[0]!, PlainPhoto.withSpot(amp)];
+      runtime.setImage(390, a.data, a.width, a.height);
+      runtime.setImage(391, b.data, b.width, b.height);
+      try {
+        runtime.stitch([390, 391], flat, { kind: "preview" });
+      } catch (err) {
+        expect(err).toBeInstanceOf(PixError);
+        expect((err as PixError).details?.reason).not.toBe("OPENCV");
+      }
+    }
+    let out;
+    try {
+      out = runtime.stitch([330, 331, 332, 333], flat, { kind: "preview" });
+    } catch (err) {
+      expect(err).toBeInstanceOf(PixError);
+      expect((err as PixError).details?.reason).not.toBe("OPENCV");
+      return;
+    }
+    expect(out.used).not.toContain(331);
+    expect(out.dropped).toContain(331);
   }, 120_000);
 
   it("links pans whose matches are very strong (OpenCV zeroes their confidence)", () => {

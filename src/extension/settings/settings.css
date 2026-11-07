@@ -15,3 +15,8 @@ body { background: var(--bg); overflow: auto; height: auto; }
 .formats code { flex: 1; overflow-wrap: anywhere; }
 .opt { display: inline-flex; align-items: center; gap: 4px; }
 .err { color: var(--danger); margin-block-start: 6px; }
+.engine-kinds { margin-block-end: 10px; }
+.engine-kinds li { flex-wrap: wrap; }
+.engine-kinds strong { flex: 0 0 170px; }
+.engine-links { display: flex; flex-wrap: wrap; gap: 4px 12px; flex: 1; }
+.engine-setup { display: flex; flex-direction: column; gap: 8px; margin-block-start: 10px; }
