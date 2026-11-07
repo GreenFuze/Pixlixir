@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GreenFuze/Pixlixir/releases"><img alt="Download" src="https://img.shields.io/github/v/release/GreenFuze/Pixlixir?include_prereleases&label=download&color=6b4fbb"></a>
+  <a href="#-install"><img alt="Download" src="https://img.shields.io/github/v/release/GreenFuze/Pixlixir?include_prereleases&label=download&color=6b4fbb"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
   <img alt="Chrome extension" src="https://img.shields.io/badge/Chrome-extension-4285F4?logo=googlechrome&logoColor=white">
   <img alt="Runs locally" src="https://img.shields.io/badge/processing-100%25%20local-2ea44f">
@@ -75,19 +75,37 @@ with live progress and time left. Results are saved, so the next scan only check
 
 ## 🚀 Install
 
-Pixlixir is not in the Chrome Web Store yet. Installing it takes a minute:
+Pixlixir installs straight from GitHub in about a minute.
 
-1. **Download** `pixlixir-vX.Y.Z.zip` from the [latest release](https://github.com/GreenFuze/Pixlixir/releases).
-2. **Unzip** it into a folder you'll keep (Chrome loads the extension from there).
-3. Open **`chrome://extensions`**, switch on **Developer mode** (top right), click **Load unpacked**
-   and choose the unzipped folder.
-4. Open **[photos.google.com](https://photos.google.com)** and click the **✦ Pixlixir** chip in the
-   bottom-right corner, or the Pixlixir icon in the toolbar.
+**1. Get it.** Paste one line into a terminal:
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/install.ps1 | iex
+```
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/install.sh | bash
+```
+
+It downloads the latest release into a `Pixlixir` folder in your home folder and copies that
+folder's path. Rather not run a script? Download **[pixlixir.zip](https://github.com/GreenFuze/Pixlixir/releases/latest/download/pixlixir.zip)**
+and unzip it into a folder you'll keep.
+
+**2. Add it to Chrome.** Open **`chrome://extensions`**, switch on **Developer mode** (top right),
+click **Load unpacked** and choose the `Pixlixir` folder.
+
+**3. Use it.** Open **[photos.google.com](https://photos.google.com)** and click the **✦ Pixlixir**
+chip in the bottom-right corner.
 
 Needs Chrome 116 or newer. Other Chromium browsers (Edge, Brave) may work but aren't tested yet.
 
-**Updating:** download the new zip, replace the folder's contents, and press ↻ on Pixlixir's card
-in `chrome://extensions`. Your settings and saved scans are kept.
+**Updating:** run the same line again (or unzip the new zip over the same folder), then press ↻ on
+Pixlixir's card in `chrome://extensions`. Keep the folder where it is: Chrome ties your settings
+and saved scans to it, and a moved folder starts fresh.
 
 ## ⚠️ Good to know
 
@@ -132,6 +150,10 @@ Then **Load unpacked** the `dist/` folder. The first build downloads the panoram
 | `npm run test:e2e` | The real build in real Chromium against a fake Google backend (Playwright; first run `npx playwright install chromium`) |
 | `npm run typecheck` | Strict TypeScript |
 | `npm run check` | All of the above |
+
+**Releasing:** bump `version` in `src/extension/manifest.json` and `package.json`, commit, then push
+a tag such as `v0.2.0`. The [Release workflow](.github/workflows/release.yml) tests, builds and
+attaches `pixlixir.zip` to the release, so the install line picks it up.
 
 Manual test guides: [Split](docs/testing/MANUAL-TEST-split.md) · [Panorama](docs/testing/MANUAL-TEST-panorama.md) ·
 [Scan library](docs/testing/MANUAL-TEST-scan.md) · [Duplicates](docs/testing/MANUAL-TEST-duplicates.md) ·

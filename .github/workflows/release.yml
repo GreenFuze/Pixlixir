@@ -1,0 +1,60 @@
+# Builds the extension and attaches it to a GitHub release.
+# Release: bump "version" in src/extension/manifest.json and package.json, commit, then
+#   git tag vX.Y.Z && git push origin vX.Y.Z
+# Rebuild an existing release: run this workflow by hand with its tag.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to rebuild and attach (for example v0.1.0)
+        required: true
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: vendor
+          key: vendor-${{ hashFiles('scripts/vendor-pyodide.mjs', 'package-lock.json') }}
+      - run: npm run vendor
+      - run: npm run typecheck
+      - run: npm test
+
+      # The tag must name the version Chrome will show.
+      - name: Check the tag matches the manifest version
+        run: |
+          VERSION=$(node -p "require('./src/extension/manifest.json').version")
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match manifest version $VERSION"
+            exit 1
+          fi
+
+      # pixlixir.zip keeps one name, so releases/latest/download/pixlixir.zip always gets the newest.
+      - name: Build and zip
+        run: |
+          node scripts/build.mjs --out=dist-release
+          (cd dist-release && zip -qr ../pixlixir.zip .)
+          cp pixlixir.zip "pixlixir-$TAG.zip"
+
+      - name: Attach to the release
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Pixlixir ${TAG#v}" --generate-notes
+          fi
+          gh release upload "$TAG" pixlixir.zip "pixlixir-$TAG.zip" --clobber
