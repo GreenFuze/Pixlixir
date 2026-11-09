@@ -24,6 +24,7 @@ import { LocalEngine, type EngineModel } from "./local-engines.js";
 import { ResultInput, type BroughtBack } from "./result-input.js";
 import { SiteFiller, type FillStep } from "./site-filler.js";
 import { SplitWorkerClient } from "../worker-client.js";
+import { UpscaleController, type UpscaleView } from "../upscale/upscale-controller.js";
 
 export type EditPhase = { name: "loading"; step: string } | { name: "ready" } | { name: "saving"; step: string } | { name: "saved" } | { name: "failed"; error: SerializedError };
 
@@ -85,6 +86,8 @@ export interface EditSnapshot {
   fixTarget: FixTarget | null;
   saveDraft: EditSaveDraft | null;
   published: PublishedPanorama | null;
+  /** The Upscale panel, while open. */
+  upscale: UpscaleView | null;
   notice: SerializedError | null;
 }
 
@@ -132,15 +135,19 @@ export class EditSession extends EditorSession<EditSnapshot> implements FixContr
   #fixWorker: SplitWorkerClient | null = null;
   #fixTimer: ReturnType<typeof setTimeout> | null = null;
   #fixGeneration = 0;
+  #upscale: UpscaleController | null = null;
+  /** Open the Upscale panel as soon as the photo is in (the Upscale tool). */
+  readonly #startWithUpscale: boolean;
 
-  constructor(params: EditorParams) {
+  constructor(params: EditorParams, options: { startWithUpscale?: boolean } = {}) {
     super({
       params,
       phase: { name: "loading", step: "Downloading the photo…" },
       item: null, size: null, shownUrl: null, previousUrl: null, versions: 0, strokes: [],
       presetId: "erase", text: EditPrompt.preset("erase").text, services: [], serviceId: "chatgpt", signIn: {}, autoSend: true, engineModels: null, engineBusy: false, strength: EditSession.DEFAULT_STRENGTH,
-      handover: null, fix: null, fixTarget: null, saveDraft: null, published: null, notice: null,
+      handover: null, fix: null, fixTarget: null, saveDraft: null, published: null, upscale: null, notice: null,
     });
+    this.#startWithUpscale = options.startWithUpscale ?? false;
     this.#gateway = new PhotosGateway(params.email, params.tabId);
     this.#services = new ServiceStore(params.email);
   }
@@ -153,6 +160,7 @@ export class EditSession extends EditorSession<EditSnapshot> implements FixContr
     this.#engineRun?.abort();
     this.#engineAsk?.abort();
     this.endFix();
+    this.closeUpscale();
     for (const v of this.#versions) { v.bitmap.close(); URL.revokeObjectURL(v.url); }
     this.clearCandidates();
     if (this.snapshot.handover) URL.revokeObjectURL(this.snapshot.handover.sentUrl);
@@ -178,6 +186,7 @@ export class EditSession extends EditorSession<EditSnapshot> implements FixContr
       // Paragraph: ready to brush.
       await this.pushVersion(bitmap, null);
       this.set({ item, phase: { name: "ready" } });
+      if (this.#startWithUpscale) this.openUpscale();
     } catch (err) {
       this.fail(err);
     }
@@ -711,6 +720,37 @@ export class EditSession extends EditorSession<EditSnapshot> implements FixContr
     const fix = this.snapshot.fix;
     if (fix) for (const url of [fix.fixedUrl, fix.originalUrl, fix.maskUrl]) if (url) URL.revokeObjectURL(url);
     this.set({ fix: null, fixTarget: null });
+  }
+
+  // ---- upscale (on this computer, ADR-0010) --------------------------------------
+
+  /** Opens the Upscale panel over the current version. */
+  openUpscale(): void {
+    if (this.#upscale) return;
+    const { bitmap } = this.current();
+    this.#upscale = new UpscaleController(bitmap.width, bitmap.height, (upscale) => this.set({ upscale }));
+    void this.#upscale.start(bitmap);
+  }
+
+  chooseUpscale(patch: Parameters<UpscaleController["choose"]>[0]): void {
+    this.#upscale?.choose(patch);
+  }
+
+  /** Enlarges the whole photo; the result becomes the next version and the panel closes. */
+  async applyUpscale(): Promise<void> {
+    const controller = this.#upscale;
+    if (!controller) return;
+    const result = await controller.apply();
+    if (!result || this.#upscale !== controller) return;
+    await this.pushVersion(result.bitmap, result.step);
+    this.set({ strokes: [], published: null, notice: null });
+    if (this.snapshot.phase.name === "saved") this.set({ phase: { name: "ready" } });
+    this.closeUpscale();
+  }
+
+  closeUpscale(): void {
+    this.#upscale?.dispose();
+    this.#upscale = null;
   }
 
   // ---- saving -----------------------------------------------------------------

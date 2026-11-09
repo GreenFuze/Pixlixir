@@ -86,6 +86,7 @@ Phases follow [ROADMAP.md](ROADMAP.md). `P1` = must-have for that phase.
 | S-15 | Classic adjustments: exposure, contrast, WB, saturation, color balance, sharpness, NR | 4 | todo |
 | S-16 | Geometry: crop, rotate, perspective, vignette, selective color, tone curve | 4 | todo |
 | S-17 | Provenance record per revision (provider, model, params, parent) | 3 | todo |
+| S-18 | Upscale 2x or 4x on this computer, with a Smooth setting for grain (Real-ESRGAN compact, WebGPU or CPU, ADR-0010). Batch todo | 3 | implemented |
 
 ## V — Video Studio
 
@@ -179,7 +180,7 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| D-01 | Same picture at 100%: identical after scaling to one size, compared at thumbnail size (not a byte match) | 3 | implemented |
+| D-01 | Same image at 100%: every 16 px square matches at up to 1024 px, so burst shots score less; an unedited crop saved within 2 s counts (ADR-0008). Crops saved later: todo | 3 | implemented |
 | D-02 | Image-based de-dup with a similarity the user chooses (Google Photos has none) — hashes find candidates, pixels check them | 3 | implemented |
 | D-03 | Staged pipeline: candidates → light check → detailed → full-res verify | 3 | todo |
 | D-04 | Best copy selected automatically (highest resolution, then file size, then location), with the reason shown | 3 | implemented |

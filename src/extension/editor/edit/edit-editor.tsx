@@ -8,6 +8,7 @@ import type { SignIn } from "./ai-services.js";
 import { EDIT_PRESETS } from "./edit-presets.js";
 import type { EditFill, EditSession } from "./edit-session.js";
 import { ResultInput } from "./result-input.js";
+import { UpscalePanel } from "../upscale/upscale-panel.js";
 
 const BRUSH_COLOR = "#ff00ff";
 const SIGN_IN_MARK: Record<SignIn, string> = { in: "● ", out: "○ ", unknown: "" };
@@ -265,6 +266,7 @@ export function EditEditor(props: { session: EditSession }) {
 
             <button class="btn primary" disabled={!session.canSend()} onClick={() => session.send()}>Send</button>
             <button class="btn" title="Glare, colour, dust and sharpening, on this computer. Nothing is sent" disabled={!editable || snap.fix !== null} onClick={() => void session.openAutoFix()}>Auto fix</button>
+            <button class="btn" title="More pixels, with detail drawn in by a model on this computer. Nothing is sent" disabled={!editable || snap.upscale !== null} onClick={() => session.openUpscale()}>Upscale</button>
             {snap.notice && <ErrorBox error={snap.notice} />}
           </aside>
         </main>
@@ -283,6 +285,7 @@ export function EditEditor(props: { session: EditSession }) {
 
       {snap.handover && <Handover session={session} />}
       {snap.fix && snap.fixTarget && <FixPanel controller={session} fix={snap.fix} target={snap.fixTarget} title="Auto fix" lightingAvailable={false} />}
+      {snap.upscale && snap.shownUrl && snap.size && <UpscalePanel actions={session} view={snap.upscale} photoUrl={snap.shownUrl} size={snap.size} />}
       {snap.saveDraft && <SaveDialog session={session} />}
     </div>
   );

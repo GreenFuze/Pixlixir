@@ -19,3 +19,10 @@ Derivative Work (e.g. an "About" or "Credits" screen):
 
 Pixlixir is not affiliated with, endorsed by, or sponsored by Google LLC.
 "Google Photos" is a trademark of Google LLC.
+
+THIRD-PARTY PARTS SHIPPED IN THE EXTENSION
+------------------------------------------
+- Upscale's model is made from Real-ESRGAN (https://github.com/xinntao/Real-ESRGAN),
+  Copyright (c) 2021 Xintao Wang, BSD 3-Clause License; see models/LICENSE-Real-ESRGAN.txt.
+- ONNX Runtime Web (https://github.com/microsoft/onnxruntime), Copyright (c) Microsoft
+  Corporation, MIT License; see ort/LICENSE-onnxruntime.txt.

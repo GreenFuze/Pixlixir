@@ -23,6 +23,8 @@ const statics = [
   ["src/extension/editor/panorama/panorama.css", "panorama.css"],
   ["src/extension/editor/edit/edit.html", "edit.html"],
   ["src/extension/editor/edit/edit.css", "edit.css"],
+  ["src/extension/editor/edit/upscale.html", "upscale.html"],
+  ["src/extension/editor/upscale/upscale.css", "upscale.css"],
   ["src/extension/scan/scan.html", "scan.html"],
   ["src/extension/scan/scan.css", "scan.css"],
   ["src/extension/settings/settings.html", "settings.html"],
@@ -32,6 +34,13 @@ const statics = [
 ];
 for (const [from, to] of statics) await cp(from, `${OUT}/${to}`);
 await new IconFactory().writeAll(`${OUT}/icons`, [16, 32, 48, 128]);
+
+// Paragraph: Upscale's model (ADR-0010) and ONNX Runtime Web's WebAssembly, shipped inside the extension.
+await mkdir(`${OUT}/models`, { recursive: true });
+for (const f of ["realesr-general-x4v3-grain.onnx", "LICENSE-Real-ESRGAN.txt"]) await cp(`src/extension/models/${f}`, `${OUT}/models/${f}`);
+await mkdir(`${OUT}/ort`, { recursive: true });
+for (const f of ["ort-wasm-simd-threaded.asyncify.wasm", "ort-wasm-simd-threaded.asyncify.mjs"]) await cp(`node_modules/onnxruntime-web/dist/${f}`, `${OUT}/ort/${f}`);
+await cp("src/extension/models/LICENSE-onnxruntime.txt", `${OUT}/ort/LICENSE-onnxruntime.txt`);
 
 // Paragraph: panorama engine runtime (Pyodide + pinned, hash-verified wheels), shipped inside the extension.
 await new PyodideVendor().run();
@@ -51,6 +60,8 @@ const contexts = await Promise.all([
       panorama: "src/extension/editor/panorama/panorama.tsx",
       "panorama-worker": "src/extension/editor/panorama/panorama-worker.ts",
       edit: "src/extension/editor/edit/edit.tsx",
+      upscale: "src/extension/editor/edit/upscale.tsx",
+      "upscale-worker": "src/extension/editor/upscale/upscale-worker.ts",
       scan: "src/extension/scan/scan.tsx",
       settings: "src/extension/settings/settings.tsx",
     },

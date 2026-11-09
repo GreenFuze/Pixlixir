@@ -1,0 +1,14 @@
+/* Upscale panel, inside the Edit page. */
+.upscale-modal { width: min(1100px, 96vw); max-height: 94vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.upscale-modal h2 { margin: 0; }
+.upscale-body { display: flex; gap: 12px; align-items: flex-start; }
+.upscale-overview { position: relative; flex: 0 0 220px; cursor: crosshair; overflow: hidden; border-radius: 6px; }
+.upscale-overview img { display: block; width: 100%; border-radius: 6px; user-select: none; }
+.upscale-box { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.25); pointer-events: none; min-width: 6px; min-height: 6px; }
+.upscale-compare { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-width: 0; }
+.upscale-compare figure { margin: 0; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.upscale-compare img, .upscale-empty { width: 100%; aspect-ratio: 1; object-fit: contain; image-rendering: auto; border-radius: 6px; background: var(--surface-2); }
+.upscale-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.upscale-compare img.stale { opacity: 0.6; }
+.upscale-controls { flex-wrap: wrap; gap: 12px; }
+.upscale-controls input[type="range"] { flex: 1; min-width: 120px; }

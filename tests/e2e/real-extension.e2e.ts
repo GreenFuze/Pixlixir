@@ -51,11 +51,23 @@ describe("real extension", () => {
     // Paragraph: a 3-shot pan, plus a lone photo much later.
     const scratch = await context.newPage();
     const shots = await makeOverlappingShots(scratch, 3);
+    const tiny = await scratch.evaluate(async () => {
+      // A small photo of its own, for Upscale on the CPU: a gradient with sharp squares.
+      const c = new OffscreenCanvas(96, 72);
+      const g = c.getContext("2d")!;
+      g.fillStyle = "#30507a"; g.fillRect(0, 0, 96, 72);
+      for (let i = 0; i < 12; i++) { g.fillStyle = i % 2 ? "#f2e8c9" : "#a33b2c"; g.fillRect(6 + (i % 6) * 14, 10 + Math.floor(i / 6) * 30, 9, 9 + (i % 3) * 4); }
+      const bytes = new Uint8Array(await (await c.convertToBlob({ type: "image/jpeg", quality: 0.9 })).arrayBuffer());
+      let bin = "";
+      for (const b of bytes) bin += String.fromCharCode(b);
+      return btoa(bin);
+    });
     await scratch.close();
     photos = shots.map((jpeg, i) => ({ mediaKey: `AF1QipFAKE${i}000000000`, dedupKey: `dedupFAKE${i}0000`, takenAtMs: T0 + i * 3000, jpeg, width: 800, height: 600 }));
     photos.push({ mediaKey: "AF1QipFAKELONE0000000", dedupKey: "dedupFAKELONE", takenAtMs: T0 + 86_400_000, jpeg: withTakenDate(shots[0]!, "2024:07:15 09:00:00"), width: 400, height: 300, fileName: "2022-12-02 (3).jpg" });
     photos.push({ mediaKey: "AF1QipFAKEWRONGDATE00", dedupKey: "dedupFAKEWRONGDATE", takenAtMs: T0 + 2 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "IMG-20190512-WA0001.jpg" });
     photos.push({ mediaKey: "AF1QipFAKECUSTOM00000", dedupKey: "dedupFAKECUSTOM", takenAtMs: T0 + 3 * 86_400_000, jpeg: shots[0]!, width: 800, height: 600, fileName: "HOLIDAY_12-05-2018_beach.jpg" });
+    photos.push({ mediaKey: "AF1QipFAKETINY0000000", dedupKey: "dedupFAKETINY", takenAtMs: T0 + 5 * 86_400_000, jpeg: Buffer.from(tiny, "base64"), width: 96, height: 72, fileName: "tiny.jpg" });
     fake = new FakePhotos(photos);
     await fake.install(context);
   });
@@ -586,6 +598,41 @@ describe("real extension", () => {
     await editor.close();
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("upscales a photo on this computer: preview, apply, save as new", async () => {
+    // Paragraph: the Upscale tool opens Edit with its panel.
+    const { tabId } = await openPhotos();
+    const uploadsBefore = fake.uploads.length;
+    const opened = context.waitForEvent("page", (p) => p.url().includes("/upscale.html"));
+    expect(await asExtensionPage({ type: "panel.openTool", tool: "upscale", tabId, mediaKeys: ["AF1QipFAKETINY0000000"] })).toMatchObject({ ok: true });
+    const editor = await opened;
+    const errors: string[] = [];
+    editor.on("pageerror", (e) => errors.push(e.message));
+    const dialog = editor.getByRole("dialog");
+    await dialog.getByRole("heading", { name: "Upscale" }).waitFor({ timeout: 60_000 });
+
+    // Paragraph: the preview runs on whichever device the browser has, and is a 4x picture.
+    await dialog.locator("img[alt=After]").waitFor({ timeout: 120_000 });
+    const device = await dialog.getByRole("radio", { name: "GPU" }).getAttribute("aria-checked") === "true" ? "gpu" : "cpu";
+    const preview = await dialog.locator("img[alt=After]").evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, h: img.naturalHeight }));
+    expect(preview).toEqual({ w: 72 * 4, h: 72 * 4 });
+    console.log("[e2e] upscale device", device);
+
+    // Paragraph: Apply makes the next version, 4x, and closes the panel.
+    await dialog.getByRole("button", { name: "Apply" }).click();
+    await dialog.waitFor({ state: "detached", timeout: 180_000 });
+    const shown = await editor.locator(".edit-frame img").evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, h: img.naturalHeight }));
+    expect(shown).toEqual({ w: 384, h: 288 });
+
+    // Paragraph: Save as new uploads a 384 x 288 JPEG.
+    await editor.getByRole("button", { name: "Save as new" }).click();
+    await editor.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => fake.uploads.length, { timeout: 60_000 }).toBe(uploadsBefore + 1);
+    const uploaded = jpeg.decode(fake.uploads[fake.uploads.length - 1]!.bytes, { useTArray: true });
+    expect({ w: uploaded.width, h: uploaded.height }).toEqual({ w: 384, h: 288 });
+    expect(errors).toEqual([]);
+    await editor.close();
   });
 
   it("refuses a scan frame that was not opened through the extension", async () => {

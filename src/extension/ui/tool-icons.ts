@@ -9,7 +9,7 @@ export interface IconShape {
   attrs: Record<string, string | number>;
 }
 
-export type ToolIconId = "split" | "panorama" | "dates" | "edit";
+export type ToolIconId = "split" | "panorama" | "dates" | "edit" | "upscale";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const INK = "#8b85a0";
@@ -62,6 +62,14 @@ export const TOOL_ICONS: Record<ToolIconId, IconShape[]> = {
     { tag: "path", attrs: { d: "M12 15L27 25", stroke: "#ff00ff", "stroke-opacity": 0.7, "stroke-width": 5, "stroke-linecap": "round", fill: "none" } },
     ...arrow(42),
     ...photo(59, 7, 34, 26),
+  ],
+
+  // A small photo in coarse blocks -> a large sharp one.
+  upscale: [
+    ...[0, 1, 2, 3].flatMap((r) => [0, 1, 2, 3].map((c) => ({ tag: "rect" as const, attrs: { x: 10 + c * 5, y: 13 + r * 5, width: 5, height: 5, fill: r + c > 3 ? LAND : SKY, opacity: 0.75 + ((r * 3 + c) % 3) * 0.12 } }))),
+    { tag: "rect", attrs: { x: 10, y: 13, width: 20, height: 20, rx: 1, fill: "none", stroke: INK, "stroke-width": 1 } },
+    ...arrow(42),
+    ...photo(59, 4, 34, 32),
   ],
 
   // A file with a name -> a calendar with the right day ticked.

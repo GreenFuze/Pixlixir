@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>The power tools Google Photos forgot to put on desktop.</b><br>
-  Find duplicate photos, stitch panoramas, split scanned album pages, fix wrong dates and edit with AI,
+  Find duplicate photos, stitch panoramas, split scanned album pages, fix wrong dates, upscale and edit with AI,
   right inside photos.google.com. Free and open source.
 </p>
 
@@ -31,9 +31,11 @@ library you already have. No export, no re-upload, no new account.
 
 ### 🔍 Find and remove duplicate photos
 Scan your whole Google Photos library, an album, a date range or a selection for photos that
-**look the same**, even at different sizes or after recompression. Choose how similar is similar
-enough, see every group side by side, and keep the best copy (highest resolution first). The kept
-photo joins the copies' albums. The rest go to **Trash**, never deleted for good.
+**look the same**, even at different sizes or after recompression. **100% means the same picture**:
+every part is compared up close, so burst shots taken a second apart score lower, while a resized
+copy or an **unedited crop** still counts as 100%. Choose how similar is similar enough, see every
+group side by side, and keep the best copy (the uncropped, highest-resolution one). The kept photo
+joins the copies' albums. The rest go to **Trash**, never deleted for good.
 
 ### 🌄 Create panoramas from your photos
 Pick 2 to 40 overlapping photos, or let a library scan **find panorama sequences for you**, and
@@ -60,13 +62,18 @@ Pixlixir prepares the request in the AI service you already use (ChatGPT, Gemini
 add) or in a local engine like IOPaint on your own computer. No API keys. You bring the result
 back, compare it, and save it as a new photo.
 
+### 🔎 Upscale photos with AI
+Make small, old or grainy photos bigger and sharper, 2× or 4×, with an AI super-resolution model
+(Real-ESRGAN) that runs on your own graphics card. Choose how much film grain to keep, preview it
+up close, and save the result as a new photo. Nothing is uploaded anywhere.
+
 ### ⚡ Bulk operations
 One scan, many checks: duplicates, panoramas and wrong dates in a single pass over your library,
 with live progress and time left. Results are saved, so the next scan only checks new photos.
 
 ## 🔒 Private by design
 
-- **Your photos stay in your browser.** Duplicates, panoramas, splitting and date fixes all run
+- **Your photos stay in your browser.** Duplicates, panoramas, splitting, upscaling and date fixes all run
   locally on your computer. There are no Pixlixir servers.
 - **Nothing is changed without you.** You review everything first. Results are saved as **new**
   items next to the originals, and original files are never modified.
@@ -177,6 +184,7 @@ file and credit: *Based on Pixlixir by GreenFuze — https://github.com/GreenFuz
 delete similar photos, Google Photos panorama maker, photo stitching, split scanned photos, photo
 scanner, album page splitter, restore old photos, fix photo dates, wrong date Google Photos, EXIF
 date fixer, WhatsApp photo dates, bulk edit Google Photos, Magic Eraser for desktop, AI photo
-editor, Google Photos web tools, Chrome extension, photo library cleanup.</sub>
+editor, AI photo upscaler, image upscaling, super resolution, enhance old photos, Real-ESRGAN,
+Google Photos web tools, Chrome extension, photo library cleanup.</sub>
 
 <sub>Google Photos is a trademark of Google LLC. Pixlixir is not affiliated with, endorsed by, or sponsored by Google.</sub>
