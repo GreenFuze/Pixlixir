@@ -18,9 +18,9 @@ photo selected automatically and everything else going to trash, never a permane
 3. *A pixel check on every match.* Hashes also match by accident: real pairs at distance 20 were
    52 apart in pixels. 16 x 16 RGB is saved with the hash, so this needs no download.
 4. *Scale.* `similarity = 100 x (1 - distance / 128)`, 75 to 99, where 128 is what unrelated photos
-   measure. 100% means distance at most 16 and pixels at most 3 apart, the same picture once at the
-   same size, and that the closer look (10) found nothing. Links are only made between photos of the
-   same shape.
+   measure. Distance at most 16 and pixels at most 3 apart gives 100 before the fine check (11),
+   which then decides. Links from prints are only made between photos of the same shape; crops come
+   from (12).
 5. *The slider lives in the results.* The detector emits one index of all links at the loosest
    setting; regrouping is instant and reads nothing.
 6. *Groups cannot chain.* Each group is its best photo plus what is similar enough to that photo.
@@ -33,7 +33,7 @@ photo selected automatically and everything else going to trash, never a permane
 9. *Trash* goes through `TrashMover`, shared with panorama originals: a move counts once the trash
    lists it. Someone else's photo is never moved, and a group always keeps a photo.
 
-10. *A closer look (2026-11-07).* The owner's rule: everything visible must match, whatever the size.
+10. *A closer look (2026-11-07), replaced by (11) the next day.* The owner's rule: everything visible must match, whatever the size.
    The prints above compare whole pictures, so a small change passes. Each pair at 88% or more now
    compares the worst cell of a 32 x 32 grid (`DetailComparer`, read from the 256 px rendition and
    saved, so only those photos are read, and only once). At most 34 keeps the score; beyond that it
@@ -41,7 +41,54 @@ photo selected automatically and everything else going to trash, never a permane
    The results also stopped dimming a photo ticked for trash: at 65% opacity a true copy looked like
    a different picture beside its best copy, which is how the owner first reported this.
 
-**Closer look, measured** (2026-11-07, read-only, numbers only; 120 photos of `/u/1`; worst cell, 0 to
+11. *The fine check (2026-11-08).* The owner's rule, made precise: 100% is the same image, at any
+   size, possibly cropped, never edited; burst shots a second apart must score less, like 95%. Their
+   own pair at 1600 x 1198 had reached 100%. The closer look (10) let 19 of 278 close burst pairs
+   through. Each pair at 88% or more is now compared at Google's rendition of up to 1024 px, in
+   brightness, square by square (`FineComparer`, 64 squares across, at least 8 px): no square more
+   than 35 apart keeps the score; beyond that it falls by 1% per 2, down to 75%. The larger photo is
+   resized to the smaller one's rendition, so both show the same detail. The pixels are too large to
+   save, so each pair's result is saved instead, and a photo is read once while its pairs are compared.
+   A pair that could not be read stops at 99%.
+12. *Crops (2026-11-08).* The owner counts an unedited crop as 100%. Prints cannot match a crop, so
+   photos saved within 2 s of each other, smaller on a side, are lined up: a correlation search over
+   every scale down to 30% of the width and every place at 64 px, refined at 256 px, accepted at 0.9 or
+   more (`CropLocator`); then moved and scaled in four steps up to 1024 px to where it matches best,
+   and given the fine check on the part it covers. Where it sits is saved, as is the check. A crop shows "crop" beside its percentage, and the uncropped photo
+   is kept. Photos with more than 5 others within 2 s are skipped: imports often share one time.
+
+**Fine check, measured** (2026-11-08, read-only, numbers only; `/u/1`, 108,202 items; the production
+code; worst square, 0 to 255; 35 is the limit). Burst pairs are two shots of the same size taken
+0.2 to 10 s apart, so certainly different exposures. Copies are made in the browser from Google's
+2048 px rendition and compared with Google's 1024 px rendition, a harder case than two of Google's.
+
+| Pair | n | min | p5 | p50 | p95 | max | Over 35 |
+|---|---|---|---|---|---|---|---|
+| Close burst shots (88% or more by prints) | 153 | 13.9 | 80.8 | 146.6 | 208.3 | 227.4 | 151 |
+| Copy at 800 px, JPEG 80% | 120 | 2.8 | 5 | 10.3 | 28.4 | 51.4 | 2 |
+| Copy recompressed at JPEG 60% | 120 | 3.8 | 7.7 | 12.3 | 21 | 49.6 | 2 |
+| Copy at half size | 120 | 3.9 | 6.7 | 9.8 | 15.8 | 27.5 | 0 |
+| A crop of the other burst shot, lined up with this one | 114 of 153 found | 9.7 | 62.4 | 126.6 | 186.8 | 208.8 | 112 |
+
+**Crops, measured** (same day; 80 photos of `/u/1`; a crop cut from Google's 2048 px rendition, saved as
+JPEG 85%, against Google's 1024 px rendition of the photo, after the four-step refinement).
+
+| Crop | Found | min | p5 | p50 | p95 | max | Over 35 |
+|---|---|---|---|---|---|---|---|
+| 80% of the photo, centred, 1000 px | 78 | 2.7 | 5.9 | 14.5 | 31.5 | 46.2 | 1 |
+| 55%, off centre, 900 px | 77 | 3.4 | 4.5 | 13.5 | 33.3 | 117.2 | 2 |
+| 60% x 50%, another shape, 700 px | 76 | 5 | 6.5 | 17.4 | 72.8 | 91.6 | 17 |
+
+9 of 240 crops were not found. With one refinement step at 1024 px only, 14, 21 and 47 of the crops
+were over 35. On the library, 400 random candidates gave 2 crops (one under 35); with the limit of 5
+neighbours there are 3,393 candidates. Lining one up took 0.28 s at p50 in the page (1.2 s worst);
+the check of a found crop took 2.4 s at p50.
+
+The first measurement, before the code was written (browser resize at 1024 px, same limit), had
+276 of 278 close bursts over and 0 of 360 copies. Of 300 random burst pairs, 1 reached 100% by prints
+and 45 were linked at all.
+
+**Measured on the owner's library** (2026-11-05,, read-only, numbers only; 120 photos of `/u/1`; worst cell, 0 to
 255). A label is drawn on a recompressed copy; each copy goes through a 256 px rendition.
 
 | Against the same photo's 256 px rendition | min | p5 | p50 | p90 | p99 | max |
@@ -89,11 +136,16 @@ pairs took 0.25 s.
 
 − These figures come from controls and counts, not from anyone looking at the groups: the controls
   simulate a second copy, and this library has few real ones. Limits may need adjusting.
-− About 1 in 10 same-picture controls is over the closer look's limit, so a true copy can show less than
-  100%, and about 1 in 20 falls below the default 95%. This errs on the side of not calling photos the
-  same. These are controls: real pairs have not been measured or judged.
-− A blur or a change that keeps a small area's average colour can still reach 100%: about half of the
-  blurred patches did. The closer look reads 256 px renditions and sees no finer detail.
+− About 1 in 60 copies in the controls is over the fine check's limit and shows less than 100%; 2 of
+  153 close burst pairs stay under it. These are controls: real pairs have not been judged by anyone.
+− An edit of the whole picture, such as 3% brighter or a little more colour, cannot be told from
+  recompression this way, so it can still show 100%. A signed brightness difference was not measured.
+− The first scan after this change reads every photo in a close pair at 1024 px: many times the 128 px
+  prints. How long that takes on a large library was not timed.
+− Crops saved more than 2 s from their photo are not found, nor crops in batches sharing one time.
+  A crop of another shape shows less than 100% about 1 time in 5; about 1 crop in 25 is not found.
+− The first scan lines up every crop candidate: about 3,400 on the owner's library at 0.28 s each, so
+  roughly a quarter of an hour of work in the page, estimated, not timed. Results are saved.
 − A rotated copy has another shape, so it is not found. Videos are not compared.
 − About 1% of same-picture controls landed beyond distance 32 (worst 64), so some copies are missed even at 75%.
 − Comparing grows with the square of the photos: about 7 minutes at 100,000 by extrapolation, untimed.

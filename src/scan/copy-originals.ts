@@ -6,7 +6,8 @@
 
 import type { LibraryItem } from "../domain/types.js";
 import { ErrorCode, PixError } from "../shared/errors.js";
-import { CloserLook, PrintComparer, SavedPhotoReader, type ClosePair, type PhotoPrint, type PhotoReader } from "./duplicates.js";
+import { PrintComparer, SavedPhotoReader, type PhotoPrint, type PhotoReader } from "./duplicates.js";
+import { FineCheck, type ClosePair } from "./fine-check.js";
 import type { ScanCache } from "./scan-cache.js";
 import type { ScanContext } from "./scan-detector.js";
 import type { ScanScope } from "./scan-scope.js";
@@ -25,7 +26,7 @@ export class OriginalFinder {
   constructor(
     private readonly printer: PhotoReader,
     private readonly cache: ScanCache<PhotoPrint>,
-    private readonly details: ScanCache<Uint8Array>,
+    private readonly fine: ScanCache<number>,
     private readonly library: LibraryLister,
   ) {}
 
@@ -51,8 +52,8 @@ export class OriginalFinder {
       if (print) pairs.push(...OriginalFinder.likely(copy, print, readable, hashes, (i) => prints.get(readable[i]!.dedupKey)!));
     }
 
-    // Paragraph: a closer look at the close ones, then the best of each copy.
-    const { similarities, unreadable: unseen } = await new CloserLook(this.printer, this.details).rescore(pairs, ctx);
+    // Paragraph: every square of the close ones, then the best of each copy.
+    const { similarities, unreadable: unseen } = await new FineCheck(this.printer, this.fine).rescore(pairs, ctx);
     const best = new Map<string, OriginalMatch>();
     for (const [n, pair] of pairs.entries()) {
       const match: OriginalMatch = { copy: pair.a, original: pair.b, similarity: similarities[n]! };

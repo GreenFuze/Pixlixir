@@ -226,7 +226,7 @@ function DuplicateRow(props: { session: ScanSession; snap: ScanSnapshot; group: 
               {view.thumbs[item.dedupKey] ? <img src={view.thumbs[item.dedupKey]} alt="" /> : <span class="ph" />}
               <span class="dup-caption">
                 <input type="checkbox" aria-label="Move to trash" checked={goes} disabled={busy || !mine || lastToKeep} onChange={() => session.toggleDuplicate(group, m)} />
-                {n === 0 ? <span class="pill ok" title={group.reason}>Best</span> : <span class="pill">{m.similarity}%</span>}
+                {n === 0 ? <span class="pill ok" title={group.reason}>Best</span> : <span class="pill" title={m.crop ? "A crop of the best photo" : undefined}>{m.similarity}%{m.crop ? " crop" : ""}</span>}
                 {!mine && <span class="pill" title="Someone else’s photo: it cannot be moved to trash">Not yours</span>}
               </span>
               <span class="muted small">{item.width.toLocaleString()} × {item.height.toLocaleString()}{fileSize(sizeBytes)}</span>

@@ -11,6 +11,7 @@ import type { LibraryItem } from "../../domain/types.js";
 import { OriginalFinder, type LibraryLister, type OriginalMatch } from "../../scan/copy-originals.js";
 import { DateFixApplier, FilenameDateDetector, type DateFixFinding, type PlannedDate } from "../../scan/date-fix.js";
 import { DuplicateGrouper, DuplicatePlans, DuplicatesDetector, DuplicateSimilarity, DuplicateTrasher, type DuplicateGroup, type DuplicateIndex, type DuplicateMember, type PhotoPrint } from "../../scan/duplicates.js";
+import type { CropResult } from "../../scan/fine-check.js";
 import { FilenameFormats } from "../../scan/filename-format.js";
 import { LibraryCatalog } from "../../scan/library-catalog.js";
 import { LibraryScanner, type ScanSummary } from "../../scan/library-scanner.js";
@@ -360,8 +361,9 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     }
     if (chosen.duplicates) {
       const prints = this.results().cache<PhotoPrint>(params.email, "duplicates");
-      const details = this.results().cache<Uint8Array>(params.email, "duplicates");
-      detectors.push(new DuplicatesDetector(new CanvasPhotoPrinter(this.#gateway), this.#gateway, prints, details, recheck) as ScanDetector);
+      const fine = this.results().cache<number>(params.email, "duplicates");
+      const crops = this.results().cache<CropResult>(params.email, "duplicates");
+      detectors.push(new DuplicatesDetector(new CanvasPhotoPrinter(this.#gateway), this.#gateway, prints, fine, crops, recheck) as ScanDetector);
     }
     if (chosen.panorama) {
       const saved = await this.store().savedPanoramas(params.email);
@@ -499,7 +501,7 @@ export class ScanSession extends EditorSession<ScanSnapshot> {
     try {
       const { email } = this.snapshot.params;
       const lister: LibraryLister = library ? { collect: async () => [...library] } : new LibraryCatalog(this.#gateway);
-      const finder = new OriginalFinder(new CanvasPhotoPrinter(this.#gateway), this.results().cache<PhotoPrint>(email, "duplicates"), this.results().cache<Uint8Array>(email, "duplicates"), lister);
+      const finder = new OriginalFinder(new CanvasPhotoPrinter(this.#gateway), this.results().cache<PhotoPrint>(email, "duplicates"), this.results().cache<number>(email, "duplicates"), lister);
       const { unreadable } = await finder.run(copies, { signal, progress }, (match) => this.addOriginal(match));
       const looked = new Set(copies.map((c) => c.mediaKey));
       this.set({ dateFixes: this.snapshot.dateFixes.map((d) => (looked.has(d.finding.item.mediaKey) ? { ...d, searched: true } : d)) });

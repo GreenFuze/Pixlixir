@@ -6,7 +6,10 @@ Photos tab. **Moving to trash is real.** Use test copies: upload a photo, and a 
 1. Side panel → **Bulk operations** → tick only **Duplicates** → **Scan**. Expect "Reading photos",
    "Comparing photos", then groups. A later scan skips the reading.
 2. Each group's first photo has a **Best** pill; hover it for why. The others show their similarity and are ticked.
-3. Move **Similarity**: groups change at once, without reading anything. 100% shows only the same picture.
+3. Move **Similarity**: groups change at once, without reading anything. 100% shows only the same image:
+   burst shots taken seconds apart show less. The first scan after updating says "Looking closer" while it
+   reads the close pairs at 1024 px; later scans skip that.
+   A crop saved at the same time as its photo shows "100% crop" when nothing else changed.
 4. Untick a copy: it stays. Tick the Best photo and untick another: that other one stays instead.
    The last photo of a group cannot be ticked.
 5. Look through the groups at a low setting. Report any that are not really the same picture.
@@ -16,5 +19,6 @@ Photos tab. **Moving to trash is real.** Use test copies: upload a photo, and a 
 8. Put a copy in a shared album and scan again: that group is left alone, with a pill saying so.
 9. Side panel → **Recent work** lists "Duplicates moved to trash".
 
-Known limits: comparison is at thumbnail size; rotated copies and videos are not found; copies are
-only found among the photos looked through, so use **Whole library**; restoring is from Google's Trash page.
+Known limits: crops are only found when saved within 2 seconds of the photo; a small brightness or colour
+edit can still show 100%; rotated copies and videos are not found; copies are only found among the photos
+looked through, so use **Whole library**; restoring is from Google's Trash page.

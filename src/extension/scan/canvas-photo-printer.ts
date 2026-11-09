@@ -2,15 +2,14 @@
 
 import { bmvbhash } from "blockhash-core";
 import type { LibraryItem } from "../../domain/types.js";
-import { DetailComparer, type PhotoPrint, type PhotoReader } from "../../scan/duplicates.js";
+import type { PhotoPrint, PhotoReader } from "../../scan/duplicates.js";
+import { LumaImage } from "../../scan/fine-check.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import type { PhotosGateway } from "../editor/photos-gateway.js";
 
 export class CanvasPhotoPrinter implements PhotoReader {
   /** Rendition read from Google (about 5 KB). */
   static readonly READ_SIDE = 128;
-  /** Rendition read for a closer look. */
-  static readonly DETAIL_READ_SIDE = 256;
   private static readonly HASH_SIDE = 64;
   private static readonly HASH_BLOCKS = 16;
   private static readonly TINY_SIDE = 16;
@@ -24,21 +23,18 @@ export class CanvasPhotoPrinter implements PhotoReader {
     return { hash, tiny: CanvasPhotoPrinter.rgb(await CanvasPhotoPrinter.pixels(blob, CanvasPhotoPrinter.TINY_SIDE)) };
   }
 
-  /** Resized in two steps, as measured: one large step of the browser's resize behaved differently on the same picture. */
-  async detail(item: LibraryItem): Promise<Uint8Array> {
-    const blob = await this.gateway.thumbnail(item.baseUrl, CanvasPhotoPrinter.DETAIL_READ_SIDE);
-    const twice = DetailComparer.SIDE * 2;
-    const rgba = await CanvasPhotoPrinter.pixels(blob, twice);
-    const out = new Uint8Array(DetailComparer.SIDE * DetailComparer.SIDE * 3);
-    for (let y = 0; y < DetailComparer.SIDE; y++) {
-      for (let x = 0; x < DetailComparer.SIDE; x++) {
-        for (let c = 0; c < 3; c++) {
-          const at = (row: number, col: number) => rgba[(row * twice + col) * 4 + c]!;
-          out[(y * DetailComparer.SIDE + x) * 3 + c] = Math.round((at(y * 2, x * 2) + at(y * 2, x * 2 + 1) + at(y * 2 + 1, x * 2) + at(y * 2 + 1, x * 2 + 1)) / 4);
-        }
-      }
+  /** Google's rendition at up to maxSide, at the size Google made it: comparing renditions of one size keeps resizing out of it. */
+  async luma(item: LibraryItem, maxSide: number): Promise<LumaImage> {
+    const blob = await this.gateway.thumbnail(item.baseUrl, maxSide);
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d", { willReadFrequently: true });
+      if (!ctx) throw new PixError(ErrorCode.MediaDecodeFailed, "2D canvas unavailable");
+      ctx.drawImage(bitmap, 0, 0);
+      return LumaImage.fromRgba(ctx.getImageData(0, 0, bitmap.width, bitmap.height).data, bitmap.width, bitmap.height);
+    } finally {
+      bitmap.close();
     }
-    return out;
   }
 
   private static rgb(rgba: Uint8ClampedArray): Uint8Array {

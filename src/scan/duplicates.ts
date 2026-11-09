@@ -3,13 +3,15 @@
  * another size or compression have different bytes, so they are not the same file to Google Photos.
  *
  * A perceptual hash finds candidates; a tiny pixel comparison drops hashes that match by accident;
- * a closer look at each close pair decides whether everything visible matches; the best copy of
- * each group is chosen automatically. Limits measured on a real library: ADR-0008.
+ * a comparison of every small square at up to 1024 px decides whether it is the same image, so burst
+ * shots fall below 100%; photos saved within seconds of each other are also searched for crops. The
+ * best copy of each group is chosen automatically. Limits measured on a real library: ADR-0008.
  */
 
 import pLimit from "p-limit";
 import type { AlbumRef, ItemDetails, ItemFileInfo, LibraryItem } from "../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../shared/errors.js";
+import { CropCandidates, CropFinder, FineCheck, type ClosePair, type CropResult, type PhotoLumaReader } from "./fine-check.js";
 import type { ScanCache } from "./scan-cache.js";
 import { ScanFailures, type DetectorStats, type ScanContext, type ScanDetector, type ScanFinding } from "./scan-detector.js";
 import { TrashMover, type TrashGateway } from "./trash-mover.js";
@@ -24,15 +26,10 @@ export interface PhotoPrinter {
   print(item: LibraryItem): Promise<PhotoPrint>;
 }
 
-/** A closer look at a photo: DetailComparer.SIDE x SIDE RGB. Read only for photos whose print already matched. */
-export interface PhotoDetailReader {
-  detail(item: LibraryItem): Promise<Uint8Array>;
-}
-
-export type PhotoReader = PhotoPrinter & PhotoDetailReader;
+export type PhotoReader = PhotoPrinter & PhotoLumaReader;
 
 export class DuplicateSimilarity {
-  static readonly MIN_PERCENT = 75;
+  static readonly MIN_PERCENT = FineCheck.MIN_PERCENT;
   static readonly MAX_PERCENT = 100;
   static readonly DEFAULT_PERCENT = 95;
   /** Unrelated photos differ in half of the 256 bits. */
@@ -41,51 +38,15 @@ export class DuplicateSimilarity {
   static readonly MAX_DISTANCE = 32;
   /** Same picture, even 10% brighter or cropped by 3%, stayed below this. */
   static readonly MAX_PIXEL_DIFF = 20;
-  /** Together these make 100%: the same picture once at the same size. */
+  /** Together these make 100% at thumbnail size, before FineCheck. */
   static readonly SAME_DISTANCE = 16;
   static readonly SAME_PIXEL_DIFF = 3;
-  /** Pairs this close get a closer look: the score at SAME_DISTANCE. */
-  static readonly CLOSER_LOOK_FROM = 88;
-  /**
-   * No small part of the picture is further apart than this: everything visible matches, at any size.
-   * Measured on 120 real photos (ADR-0008): most recompressed copies stay under it, a label of 4% x 3% goes over.
-   */
-  static readonly SAME_CELL_DIFF = 34;
-  /** Beyond that, each percent lost. A clear difference falls below the default setting. */
-  static readonly CELL_DIFF_PER_PERCENT = 2;
 
   /** A percentage, or null when these two are not the same picture at any setting. */
   static score(distance: number, pixelDiff: number): number | null {
     if (distance > DuplicateSimilarity.MAX_DISTANCE || pixelDiff > DuplicateSimilarity.MAX_PIXEL_DIFF) return null;
     if (distance <= DuplicateSimilarity.SAME_DISTANCE && pixelDiff <= DuplicateSimilarity.SAME_PIXEL_DIFF) return 100;
     return Math.min(99, Math.round(100 * (1 - distance / DuplicateSimilarity.UNRELATED_DISTANCE)));
-  }
-
-  /** The score once the worst part of the picture has been compared. It can only fall. */
-  static afterCloserLook(similarity: number, worstCell: number): number {
-    if (worstCell <= DuplicateSimilarity.SAME_CELL_DIFF) return similarity;
-    const seen = Math.round(99 - (worstCell - DuplicateSimilarity.SAME_CELL_DIFF) / DuplicateSimilarity.CELL_DIFF_PER_PERCENT);
-    return Math.max(DuplicateSimilarity.MIN_PERCENT, Math.min(similarity, seen));
-  }
-
-  /** A pair that could not be looked at closely is not known to be the same. */
-  static unconfirmed(similarity: number): number {
-    return Math.min(99, similarity);
-  }
-}
-
-export class DetailComparer {
-  static readonly SIDE = 32;
-
-  /** Mean absolute difference per channel in the cell of the picture that differs most, 0 to 255. */
-  static worstCell(a: Uint8Array, b: Uint8Array): number {
-    const size = DetailComparer.SIDE * DetailComparer.SIDE * 3;
-    if (a.length !== size || b.length !== size) throw new PixError(ErrorCode.Internal, "Photo details of the wrong size", { a: a.length, b: b.length });
-    let worst = 0;
-    for (let at = 0; at < size; at += 3) {
-      worst = Math.max(worst, (Math.abs(a[at]! - b[at]!) + Math.abs(a[at + 1]! - b[at + 1]!) + Math.abs(a[at + 2]! - b[at + 2]!)) / 3);
-    }
-    return worst;
   }
 }
 
@@ -99,6 +60,8 @@ export interface DuplicateLink {
   a: number;
   b: number;
   similarity: number;
+  /** The smaller photo is a crop of the other. */
+  crop?: true;
 }
 
 /** One finding per scan: moving the slider regroups these without reading anything again. */
@@ -186,6 +149,8 @@ export interface DuplicateMember {
   photo: DuplicatePhoto;
   /** To the group's best photo; 100 for the best photo itself. */
   similarity: number;
+  /** A crop of the group's best photo. */
+  crop?: true;
 }
 
 export interface DuplicateGroup {
@@ -210,17 +175,17 @@ export class DuplicateGrouper {
    */
   static groups(index: Pick<DuplicateIndex, "photos" | "links">, minSimilarity: number, gone: ReadonlySet<string> = new Set()): DuplicateGroup[] {
     // Paragraph: who is close to whom, at this setting.
-    const near = new Map<number, Map<number, number>>();
-    const connect = (from: number, to: number, similarity: number) => {
-      const row = near.get(from) ?? new Map<number, number>();
-      row.set(to, similarity);
+    const near = new Map<number, Map<number, { similarity: number; crop: boolean }>>();
+    const connect = (from: number, to: number, similarity: number, crop: boolean) => {
+      const row = near.get(from) ?? new Map<number, { similarity: number; crop: boolean }>();
+      row.set(to, { similarity, crop });
       near.set(from, row);
     };
     const present = (i: number) => !gone.has(index.photos[i]!.item.dedupKey);
     for (const l of index.links) {
       if (l.similarity >= minSimilarity && present(l.a) && present(l.b)) {
-        connect(l.a, l.b, l.similarity);
-        connect(l.b, l.a, l.similarity);
+        connect(l.a, l.b, l.similarity, l.crop === true);
+        connect(l.b, l.a, l.similarity, l.crop === true);
       }
     }
 
@@ -235,7 +200,7 @@ export class DuplicateGrouper {
       taken.add(leader);
       for (const [i] of others) taken.add(i);
       const members = others
-        .map(([i, similarity]) => ({ photo: index.photos[i]!, similarity }))
+        .map(([i, { similarity, crop }]): DuplicateMember => ({ photo: index.photos[i]!, similarity, ...(crop ? { crop: true as const } : {}) }))
         .sort((x, y) => DuplicateGrouper.compare(x.photo, y.photo));
       const best = index.photos[leader]!;
       groups.push({ members: [{ photo: best, similarity: 100 }, ...members], reason: DuplicateGrouper.reason(best, members.map((m) => m.photo)) });
@@ -288,7 +253,6 @@ export class SavedPhotoReader<T> {
   static readonly PARALLEL = 8;
   /** Bump when what is saved changes. */
   static readonly PRINT_VERSION = 1;
-  static readonly DETAIL_VERSION = 1;
 
   constructor(
     private readonly read: (item: LibraryItem) => Promise<T>,
@@ -299,10 +263,6 @@ export class SavedPhotoReader<T> {
 
   static prints(printer: PhotoPrinter, cache: ScanCache<PhotoPrint>, recheck: boolean): SavedPhotoReader<PhotoPrint> {
     return new SavedPhotoReader((item) => printer.print(item), cache, (item) => `v${SavedPhotoReader.PRINT_VERSION}|${item.dedupKey}`, recheck);
-  }
-
-  static details(reader: PhotoDetailReader, cache: ScanCache<Uint8Array>, recheck: boolean): SavedPhotoReader<Uint8Array> {
-    return new SavedPhotoReader((item) => reader.detail(item), cache, (item) => `detail-v${SavedPhotoReader.DETAIL_VERSION}|${item.dedupKey}`, recheck);
   }
 
   async run(items: readonly LibraryItem[], ctx: ScanContext, step: string): Promise<{ values: Map<string, T>; reused: number; checked: number; unreadable: number }> {
@@ -350,41 +310,6 @@ export class SavedPhotoReader<T> {
   }
 }
 
-export interface ClosePair {
-  a: LibraryItem;
-  b: LibraryItem;
-  similarity: number;
-}
-
-/**
- * Prints compare whole pictures at thumbnail size, so a label, a filter or a small change can pass.
- * This compares small cells of the picture, for the pairs close enough to be called the same.
- * Details are only read for those, so an existing library needs no new read of every photo.
- */
-export class CloserLook {
-  readonly #reader: SavedPhotoReader<Uint8Array>;
-
-  constructor(reader: PhotoDetailReader, cache: ScanCache<Uint8Array>, recheck: boolean = false) {
-    this.#reader = SavedPhotoReader.details(reader, cache, recheck);
-  }
-
-  /** The score of each pair, in order, and how many photos could not be read. */
-  async rescore(pairs: readonly ClosePair[], ctx: ScanContext): Promise<{ similarities: number[]; unreadable: number }> {
-    // Paragraph: each photo in a close pair, once.
-    const close = (p: ClosePair) => p.similarity >= DuplicateSimilarity.CLOSER_LOOK_FROM;
-    const items = new Map(pairs.filter(close).flatMap((p) => [p.a, p.b]).map((i) => [i.dedupKey, i]));
-    const { values, unreadable } = await this.#reader.run([...items.values()], ctx, "Looking closer");
-
-    // Paragraph: compare; a pair that could not be read is never called the same.
-    const similarities = pairs.map((p) => {
-      if (!close(p)) return p.similarity;
-      const a = values.get(p.a.dedupKey), b = values.get(p.b.dedupKey);
-      return a && b ? DuplicateSimilarity.afterCloserLook(p.similarity, DetailComparer.worstCell(a, b)) : DuplicateSimilarity.unconfirmed(p.similarity);
-    });
-    return { similarities, unreadable };
-  }
-}
-
 export class DuplicatesDetector implements ScanDetector<DuplicateIndex> {
   static readonly SIZES_PER_REQUEST = 400;
 
@@ -396,7 +321,8 @@ export class DuplicatesDetector implements ScanDetector<DuplicateIndex> {
     private readonly printer: PhotoReader,
     private readonly sizes: PhotoSizes,
     private readonly cache: ScanCache<PhotoPrint>,
-    private readonly details: ScanCache<Uint8Array>,
+    private readonly fine: ScanCache<number>,
+    private readonly crops: ScanCache<CropResult>,
     private readonly recheck: boolean = false,
   ) {}
 
@@ -414,10 +340,20 @@ export class DuplicatesDetector implements ScanDetector<DuplicateIndex> {
     const known = photos.filter((p) => prints.has(p.dedupKey));
     const compared = await PrintComparer.links(known, known.map((p) => prints.get(p.dedupKey)!), ctx.signal, (row) => ctx.progress("Comparing photos", row, known.length));
 
-    // Paragraph: the close ones are looked at more closely, so "the same" means everything visible matches.
-    const { similarities, unreadable: unseen } = await new CloserLook(this.printer, this.details, this.recheck).rescore(compared.map((l) => ({ a: known[l.a]!, b: known[l.b]!, similarity: l.similarity })), ctx);
-    if (unseen > 0) stats.failures.push(new PixError(ErrorCode.MediaFetchFailed, `${unseen} photo${unseen === 1 ? "" : "s"} could not be looked at closely, so their matches stay below 100%`, { unreadable: unseen }).toJSON());
-    const links = compared.map((l, n) => ({ ...l, similarity: similarities[n]! }));
+    // Paragraph: crops among photos saved within seconds of each other, which prints cannot match.
+    const index = new Map(known.map((p, n) => [p.dedupKey, n]));
+    const linked = new Set(compared.map((l) => `${known[l.a]!.dedupKey}|${known[l.b]!.dedupKey}`));
+    const { pairs: cropPairs, unreadable: cropUnread } = await new CropFinder(this.printer, this.crops, this.recheck).run(CropCandidates.pairs(known, linked), ctx);
+
+    // Paragraph: every close pair is compared square by square, so "the same" means the same image.
+    const pairs: ClosePair[] = [...compared.map((l) => ({ a: known[l.a]!, b: known[l.b]!, similarity: l.similarity })), ...cropPairs];
+    const { similarities, unreadable: unseen } = await new FineCheck(this.printer, this.fine, this.recheck).rescore(pairs, ctx);
+    const blind = unseen + cropUnread;
+    if (blind > 0) stats.failures.push(new PixError(ErrorCode.MediaFetchFailed, `${blind} photo${blind === 1 ? "" : "s"} could not be looked at closely, so their matches stay below 100%`, { unreadable: blind }).toJSON());
+    const links: DuplicateLink[] = [
+      ...compared.map((l, n) => ({ ...l, similarity: similarities[n]! })),
+      ...cropPairs.map((p, n) => ({ a: index.get(p.a.dedupKey)!, b: index.get(p.b.dedupKey)!, similarity: similarities[compared.length + n]!, crop: true as const })),
+    ];
     const used = [...new Set(links.flatMap((l) => [l.a, l.b]))];
     const position = new Map(used.map((old, now) => [old, now]));
     const sizes = await this.readSizes(used.map((i) => known[i]!), ctx);
@@ -426,7 +362,7 @@ export class DuplicatesDetector implements ScanDetector<DuplicateIndex> {
       detector: "duplicates",
       mediaKeys: used.map((i) => known[i]!.mediaKey),
       photos: used.map((i) => ({ item: known[i]!, sizeBytes: sizes.get(known[i]!.mediaKey) ?? null })),
-      links: links.map((l) => ({ a: position.get(l.a)!, b: position.get(l.b)!, similarity: l.similarity })),
+      links: links.map((l) => ({ a: position.get(l.a)!, b: position.get(l.b)!, similarity: l.similarity, ...(l.crop ? { crop: true as const } : {}) })),
     });
     return stats;
   }

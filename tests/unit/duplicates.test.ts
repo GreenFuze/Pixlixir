@@ -1,10 +1,12 @@
 import { bmvbhash } from "blockhash-core";
 import { describe, expect, it } from "vitest";
 import type { AlbumRef, ItemDetails, LibraryItem, Page } from "../../src/domain/types.js";
-import { DetailComparer, DuplicateGrouper, DuplicatePlans, DuplicatesDetector, DuplicateSimilarity, DuplicateTrasher, PrintComparer, type DuplicateIndex, type DuplicatePhoto, type PhotoPrint } from "../../src/scan/duplicates.js";
+import { DuplicateGrouper, DuplicatePlans, DuplicatesDetector, DuplicateSimilarity, DuplicateTrasher, PrintComparer, type DuplicateIndex, type DuplicatePhoto, type PhotoPrint } from "../../src/scan/duplicates.js";
+import { LumaImage, type CropResult } from "../../src/scan/fine-check.js";
 import type { ScanCache } from "../../src/scan/scan-cache.js";
 import { TrashMover } from "../../src/scan/trash-mover.js";
 import { ErrorCode, PixError } from "../../src/shared/errors.js";
+import { moved, view } from "../fixtures/scene.js";
 
 const item = (n: number, over: Partial<LibraryItem> = {}): LibraryItem => ({ mediaKey: `AF1QipITEM${n}00000000`, dedupKey: `dedupITEM${n}00000`, type: "photo", width: 4000, height: 3000, takenAtMs: 1_700_000_000_000 + n * 86_400_000, timezoneOffsetMs: 0, baseUrl: `https://x/${n}`, location: null, ...over });
 const photo = (n: number, over: Partial<LibraryItem> = {}, sizeBytes: number | null = null): DuplicatePhoto => ({ item: item(n, over), sizeBytes });
@@ -24,43 +26,14 @@ const memoryCache = (): ScanCache<PhotoPrint> & { map: Map<string, PhotoPrint> }
   return { map, get: async (k) => map.get(k) ?? null, put: async (k, v) => void map.set(k, v) };
 };
 
-const details = (value = 100) => new Uint8Array(DetailComparer.SIDE * DetailComparer.SIDE * 3).fill(value);
-/** The same picture with a small part changed, as with a label. */
-const labelled = () => {
-  const out = details();
-  for (let c = 0; c < 3; c++) out[(20 * DetailComparer.SIDE + 20) * 3 + c] = 250;
-  return out;
-};
-const detailCache = (): ScanCache<Uint8Array> => {
-  const map = new Map<string, Uint8Array>();
+/** What Google's rendition shows of each photo; the whole scene unless set. */
+const sameScene = () => view(256, 192);
+const memory = <T,>(): ScanCache<T> => {
+  const map = new Map<string, T>();
   return { get: async (k) => map.get(k) ?? null, put: async (k, v) => void map.set(k, v) };
 };
-
-describe("DetailComparer", () => {
-  it("sees a small change that the whole picture hides, and no change in an identical one", () => {
-    expect(DetailComparer.worstCell(details(), details())).toBe(0);
-    expect(DetailComparer.worstCell(details(), labelled())).toBe(150);
-    expect(PrintComparer.pixelDiff(details(), labelled())).toBeLessThan(1); // what the old check measured
-  });
-
-  it("fails on details of the wrong size", () => {
-    expect(() => DetailComparer.worstCell(details(), new Uint8Array(3))).toThrow(/wrong size/);
-  });
-});
-
-describe("DuplicateSimilarity.afterCloserLook", () => {
-  it("keeps the score when nothing visible differs, and drops a visible difference below the default", () => {
-    expect(DuplicateSimilarity.afterCloserLook(100, DuplicateSimilarity.SAME_CELL_DIFF)).toBe(100);
-    expect(DuplicateSimilarity.afterCloserLook(97, 0)).toBe(97);
-    expect(DuplicateSimilarity.afterCloserLook(100, DuplicateSimilarity.SAME_CELL_DIFF + 1)).toBe(99);
-    expect(DuplicateSimilarity.afterCloserLook(100, 150)).toBe(DuplicateSimilarity.MIN_PERCENT);
-    expect(DuplicateSimilarity.afterCloserLook(100, 50)).toBeLessThan(DuplicateSimilarity.DEFAULT_PERCENT);
-  });
-
-  it("never raises a score", () => {
-    expect(DuplicateSimilarity.afterCloserLook(90, DuplicateSimilarity.SAME_CELL_DIFF + 2)).toBe(90);
-  });
-});
+const fineCache = () => memory<number>();
+const cropCache = () => memory<CropResult>();
 
 describe("DuplicateSimilarity", () => {
   it("is 100% only when both the hash and the pixels say it is the same picture", () => {
@@ -183,10 +156,10 @@ describe("DuplicatePlans", () => {
 
 describe("DuplicatesDetector", () => {
   const sizes = { readItemInfo: async (keys: string[]) => keys.map((mediaKey) => ({ mediaKey, fileName: null, takenAtMs: 0, timezoneOffsetMs: 0, sizeBytes: 7 })) };
-  const printer = (values: Map<string, PhotoPrint>, seen = new Map<string, Uint8Array | "unreadable">()) => {
+  const printer = (values: Map<string, PhotoPrint>, seen = new Map<string, LumaImage | "unreadable">()) => {
     const read: string[] = [];
     const looked: string[] = [];
-    return { read, looked, print: async (i: LibraryItem) => { read.push(i.mediaKey); const p = values.get(i.mediaKey); if (!p) throw new PixError(ErrorCode.MediaFetchFailed, "gone"); return p; }, detail: async (i: LibraryItem) => { looked.push(i.mediaKey); const d = seen.get(i.mediaKey); if (d === "unreadable") throw new PixError(ErrorCode.MediaFetchFailed, "gone"); return d ?? details(); } };
+    return { read, looked, print: async (i: LibraryItem) => { read.push(i.mediaKey); const p = values.get(i.mediaKey); if (!p) throw new PixError(ErrorCode.MediaFetchFailed, "gone"); return p; }, luma: async (i: LibraryItem) => { looked.push(i.mediaKey); const d = seen.get(i.mediaKey); if (d === "unreadable") throw new PixError(ErrorCode.MediaFetchFailed, "gone"); return d ?? sameScene(); } };
   };
 
   it("reads each photo once, reuses it later, and reports only photos that match", async () => {
@@ -195,32 +168,32 @@ describe("DuplicatesDetector", () => {
     const p = printer(values);
     const cache = memoryCache();
     const found: DuplicateIndex[] = [];
-    const closer = detailCache();
-    const first = await new DuplicatesDetector(p, sizes, cache, closer).analyze(items, ctx(), (f) => found.push(f));
+    const fine = fineCache(), crops = cropCache();
+    const first = await new DuplicatesDetector(p, sizes, cache, fine, crops).analyze(items, ctx(), (f) => found.push(f));
     expect(first.photosChecked).toBe(3);
     expect(found[0]!.photos.map((x) => [x.item.mediaKey, x.sizeBytes])).toEqual([[items[0]!.mediaKey, 7], [items[1]!.mediaKey, 7]]);
     expect(found[0]!.links).toEqual([{ a: 0, b: 1, similarity: 100 }]);
 
     expect(p.looked.sort()).toEqual([items[0]!.mediaKey, items[1]!.mediaKey].sort()); // only photos that matched get a closer look
 
-    const second = await new DuplicatesDetector(p, sizes, cache, closer).analyze(items, ctx(), () => {});
+    const second = await new DuplicatesDetector(p, sizes, cache, fine, crops).analyze(items, ctx(), () => {});
     expect(second.photosReused).toBe(3);
     expect(p.read).toHaveLength(3);
     expect(p.looked).toHaveLength(2); // saved
-    await new DuplicatesDetector(p, sizes, cache, closer, true).analyze(items, ctx(), () => {});
+    await new DuplicatesDetector(p, sizes, cache, fine, crops, true).analyze(items, ctx(), () => {});
     expect(p.read).toHaveLength(6); // Re-check all
     expect(p.looked).toHaveLength(4);
   });
 
-  it("does not call two photos the same when a small part differs, and says when it could not look", async () => {
+  it("does not call two photos the same when someone moved, and says when it could not look", async () => {
     const items = [item(1), item(2), item(3), item(4)];
     const prints = new Map(items.slice(0, 2).map((i) => [i.mediaKey, print(0)]));
     const found: DuplicateIndex[] = [];
-    await new DuplicatesDetector(printer(prints, new Map([[items[1]!.mediaKey, labelled()]])), sizes, memoryCache(), detailCache()).analyze(items.slice(0, 2), ctx(), (f) => found.push(f));
+    await new DuplicatesDetector(printer(prints, new Map([[items[1]!.mediaKey, view(256, 192, undefined, moved)]])), sizes, memoryCache(), fineCache(), cropCache()).analyze(items.slice(0, 2), ctx(), (f) => found.push(f));
     expect(found[0]!.links[0]!.similarity).toBeLessThan(DuplicateSimilarity.DEFAULT_PERCENT);
 
     const blind: DuplicateIndex[] = [];
-    const r = await new DuplicatesDetector(printer(prints, new Map([[items[1]!.mediaKey, "unreadable"]])), sizes, memoryCache(), detailCache()).analyze(items.slice(0, 2), ctx(), (f) => blind.push(f));
+    const r = await new DuplicatesDetector(printer(prints, new Map([[items[1]!.mediaKey, "unreadable"]])), sizes, memoryCache(), fineCache(), cropCache()).analyze(items.slice(0, 2), ctx(), (f) => blind.push(f));
     expect(blind[0]!.links[0]!.similarity).toBe(99);
     expect(r.failures[0]!.message).toContain("could not be looked at closely");
   });
@@ -228,13 +201,13 @@ describe("DuplicatesDetector", () => {
   it("skips videos and counts a photo it cannot read, without stopping", async () => {
     const items = [item(1), item(2), item(3, { type: "video" })];
     const p = printer(new Map([[items[0]!.mediaKey, print(0)]]));
-    const r = await new DuplicatesDetector(p, sizes, memoryCache(), detailCache()).analyze(items, ctx(), () => {});
+    const r = await new DuplicatesDetector(p, sizes, memoryCache(), fineCache(), cropCache()).analyze(items, ctx(), () => {});
     expect(p.read).not.toContain(items[2]!.mediaKey);
     expect(r.failures[0]!.message).toBe("1 photo could not be read for duplicates");
   });
 
   it("stops on a problem that would hit everything", async () => {
-    const r = new DuplicatesDetector({ print: async () => { throw new PixError(ErrorCode.AccountMismatch, "other"); }, detail: async () => details() }, sizes, memoryCache(), detailCache()).analyze([item(1)], ctx(), () => {});
+    const r = new DuplicatesDetector({ print: async () => { throw new PixError(ErrorCode.AccountMismatch, "other"); }, luma: async () => sameScene() }, sizes, memoryCache(), fineCache(), cropCache()).analyze([item(1)], ctx(), () => {});
     await expect(r).rejects.toMatchObject({ code: ErrorCode.AccountMismatch });
   });
 
@@ -242,8 +215,23 @@ describe("DuplicatesDetector", () => {
     const items = [item(1), item(2)];
     const found: DuplicateIndex[] = [];
     const noSizes = { readItemInfo: async () => { throw new PixError(ErrorCode.RpcHttpError, "busy"); } };
-    await new DuplicatesDetector(printer(new Map([[items[0]!.mediaKey, print(0)], [items[1]!.mediaKey, print(0)]])), noSizes, memoryCache(), detailCache()).analyze(items, ctx(), (f) => found.push(f));
+    await new DuplicatesDetector(printer(new Map([[items[0]!.mediaKey, print(0)], [items[1]!.mediaKey, print(0)]])), noSizes, memoryCache(), fineCache(), cropCache()).analyze(items, ctx(), (f) => found.push(f));
     expect(found[0]!.photos[0]!.sizeBytes).toBeNull();
+  });
+
+  it("finds an unedited crop saved at the same time as 100%, and an edited one below it", async () => {
+    const big = item(1), crop = item(2, { width: 2000, height: 1500, takenAtMs: item(1).takenAtMs + 1000 }), other = item(3, { width: 1500, height: 1500, takenAtMs: item(1).takenAtMs + 1500 });
+    const where = { x: 0.25, y: 0.3, w: 0.5, h: 0.5 };
+    const looks = new Map<string, LumaImage | "unreadable">([[big.mediaKey, view(1024, 768)], [crop.mediaKey, view(1000, 750, where)], [other.mediaKey, view(750, 750, { x: 0.1, y: 0.1, w: 0.375, h: 0.5 }, moved)]]);
+    const prints = new Map([[big.mediaKey, print(0)], [crop.mediaKey, print(120)], [other.mediaKey, print(240)]]); // too different for prints
+    const found: DuplicateIndex[] = [];
+    await new DuplicatesDetector(printer(prints, looks), sizes, memoryCache(), fineCache(), cropCache()).analyze([big, crop, other], ctx(), (f) => found.push(f));
+    const links = found[0]!.links.map((l) => ({ pair: [found[0]!.photos[l.a]!.item.dedupKey, found[0]!.photos[l.b]!.item.dedupKey].sort().join("+"), similarity: l.similarity, crop: l.crop }));
+    expect(links).toContainEqual({ pair: `${big.dedupKey}+${crop.dedupKey}`, similarity: 100, crop: true });
+    const edited = links.find((l) => l.pair === `${big.dedupKey}+${other.dedupKey}`)!;
+    expect(edited.similarity).toBeLessThan(DuplicateSimilarity.DEFAULT_PERCENT);
+    const groups = DuplicateGrouper.groups(found[0]!, 100);
+    expect(groups[0]!.members.map((m) => [m.photo.item.dedupKey, m.crop])).toEqual([[big.dedupKey, undefined], [crop.dedupKey, true]]); // the uncropped photo is kept
   });
 });
 
