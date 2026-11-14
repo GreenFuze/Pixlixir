@@ -20,6 +20,11 @@ jobs:
       - run: npm run vendor
       - run: npm run typecheck
       - run: npm test
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helper/go.mod
+      - run: go vet ./... && go test ./...
+        working-directory: helper
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npx vitest run --config vitest.e2e.config.ts

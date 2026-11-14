@@ -122,6 +122,10 @@ export class LiveWebAdapter implements PhotosLibraryAdapter {
     return this.#rpc.listLibrary(cursor.page, cursor.startMs);
   }
 
+  search(query: string, page: string | null): Promise<Page<LibraryItem>> {
+    return this.#rpc.search(query, page);
+  }
+
   listAlbums(page: string | null): Promise<Page<AlbumRef>> {
     return this.#rpc.listAlbums(page);
   }

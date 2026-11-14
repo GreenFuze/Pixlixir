@@ -35,6 +35,11 @@ jobs:
       - run: npm run vendor
       - run: npm run typecheck
       - run: npm test
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helper/go.mod
+      - run: go test ./...
+        working-directory: helper
 
       # The tag must name the version Chrome will show.
       - name: Check the tag matches the manifest version
@@ -52,9 +57,21 @@ jobs:
           (cd dist-release && zip -qr ../pixlixir.zip .)
           cp pixlixir.zip "pixlixir-$TAG.zip"
 
+      # The Local API helper for each system, and the hashes its installers check (ADR-0012).
+      - name: Build the helper
+        working-directory: helper
+        run: |
+          VERSION="${TAG#v}"
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"; EXT=""
+            [ "$GOOS" = windows ] && EXT=".exe"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "../pixlixir-helper-$GOOS-$GOARCH$EXT" .
+          done
+          cd .. && sha256sum pixlixir-helper-* > pixlixir-helper-SHA256SUMS.txt
+
       - name: Attach to the release
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "Pixlixir ${TAG#v}" --generate-notes
           fi
-          gh release upload "$TAG" pixlixir.zip "pixlixir-$TAG.zip" --clobber
+          gh release upload "$TAG" pixlixir.zip "pixlixir-$TAG.zip" pixlixir-helper-* --clobber

@@ -24,6 +24,8 @@ const ALBUM = "AF1QipFAKEALBUM00001";
 
 export class FakePhotos {
   readonly uploads: { fileName: string; bytes: Buffer }[] = [];
+  /** Answer searches as Google does when asked too often. */
+  refuseSearches = false;
   readonly calls: { rpc: string; payload: unknown }[] = [];
   readonly refuseDates = new Set<string>();
   /** Dedup keys in the trash; they leave the timeline, like the live call. */
@@ -64,6 +66,14 @@ export class FakePhotos {
       const form = new URLSearchParams(route.request().postData() ?? "");
       const payload = JSON.parse((JSON.parse(form.get("f.req")!) as unknown[][][])[0]![0]![1] as string) as unknown;
       this.calls.push({ rpc, payload });
+      // Like the live search when asked too often (2026-11-14): no data, Google's code 8.
+      if (rpc === "EzkLib" && this.refuseSearches) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: `)]}'
+
+100
+${JSON.stringify([["wrb.fr", rpc, null, null, null, [8], "generic"]])}
+` });
+      }
       const inner = JSON.stringify(this.answer(rpc, payload));
       const body = `)]}'\n\n100\n${JSON.stringify([["wrb.fr", rpc, inner, null, null, null, "generic"]])}\n`;
       return route.fulfill({ status: 200, contentType: "application/json", body });
@@ -108,6 +118,13 @@ export class FakePhotos {
     const key = (payload as unknown[])[0] as string;
     const photo = this.photos.find((p) => p.mediaKey === key) ?? this.uploaded(key);
     switch (rpc) {
+      case "EzkLib": {
+        // Like the live search: broad, so the newest photo comes back too, whatever was asked.
+        const query = ((payload as unknown[])[7] as string[])[0]!.toLowerCase();
+        const live = this.photos.filter((p) => !this.trashed.has(p.dedupKey)).sort((a, b) => b.takenAtMs - a.takenAtMs);
+        const hits = live.filter((p, i) => i === 0 || (p.fileName ?? `${p.mediaKey}.jpg`).toLowerCase().includes(query));
+        return [hits.map((p) => this.row(p)), null];
+      }
       case "lcxiM":
         return [[...this.photos].filter((p) => !this.trashed.has(p.dedupKey)).sort((a, b) => b.takenAtMs - a.takenAtMs).map((p) => this.row(p)), null, "0"];
       case "VrseUb":
@@ -122,7 +139,7 @@ export class FakePhotos {
         const e: unknown[] = new Array(33).fill(null);
         e[0] = photo!.mediaKey;
         e[1] = "Harbour, morning";
-        e[2] = `${photo!.mediaKey}.jpg`;
+        e[2] = photo!.fileName ?? `${photo!.mediaKey}.jpg`;
         e[5] = photo!.jpeg.length;
         e[11] = photo!.dedupKey;
         e[13] = [[488584000, 22945000], true, []];

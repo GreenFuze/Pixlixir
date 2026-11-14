@@ -56,6 +56,7 @@ export const ErrorCode = {
   SiteFillFailed: "SITE_FILL_FAILED",
   LocalEngineFailed: "LOCAL_ENGINE_FAILED",
   Cancelled: "CANCELLED",
+  RateLimited: "RATE_LIMITED",
   Internal: "INTERNAL",
 } as const;
 

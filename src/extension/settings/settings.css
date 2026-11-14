@@ -20,3 +20,6 @@ body { background: var(--bg); overflow: auto; height: auto; }
 .engine-kinds strong { flex: 0 0 170px; }
 .engine-links { display: flex; flex-wrap: wrap; gap: 4px 12px; flex: 1; }
 .engine-setup { display: flex; flex-direction: column; gap: 8px; margin-block-start: 10px; }
+.ai-commands code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.engine-setup + .engine-kinds { border-top: 1px solid var(--border); padding-top: 8px; }
+.ai-commands input.port { flex: 0 0 80px; width: 80px; font-family: ui-monospace, monospace; }

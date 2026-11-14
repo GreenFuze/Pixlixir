@@ -81,6 +81,13 @@ export class MockPhotosAdapter implements PhotosLibraryAdapter {
     return { items: r.items, next: r.next === null ? null : `${startText}@${r.next}` };
   }
 
+  /** Stand-in for Google's search: file names that contain the query, ignoring case. */
+  async search(query: string, page: string | null): Promise<Page<LibraryItem>> {
+    const q = query.toLowerCase();
+    const found = [...this.#items.values()].filter((i) => (i.fileName ?? "").toLowerCase().includes(q)).sort((a, b) => b.takenAtMs - a.takenAtMs);
+    return this.page(found.map((i) => this.listed(i)), page);
+  }
+
   async listAlbums(page: string | null): Promise<Page<AlbumRef>> {
     return this.page(this.albums, page);
   }

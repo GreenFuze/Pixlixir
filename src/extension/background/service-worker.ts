@@ -5,8 +5,12 @@
  * service-worker restarts.
  */
 
+import type { AccountRef, LibraryItem, Page } from "../../domain/types.js";
+import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
-import { ContentToBackground, Messenger, PageToBackground, type PanelState, type TabState } from "../messaging/protocol.js";
+import { LocalApiService, type AccountDirectory, type ApiLibrary } from "../api/api-service.js";
+import { ApiConfigStore, NativeApiBridge } from "../api/native-bridge.js";
+import { ContentToBackground, Messenger, PageToBackground, type PageToContent, type PanelState, type ReplyMap, type TabState } from "../messaging/protocol.js";
 import { SCAN_PAGE, SCAN_SELECTION_PREFIX, SETTINGS_PAGE, TOOLS, type ScanHandover, type ToolId } from "../tools.js";
 
 class TabRegistry {
@@ -32,10 +36,68 @@ class TabRegistry {
     delete all[String(tabId)];
     await chrome.storage.session.set({ [TabRegistry.KEY]: all });
   }
+
+  /** A live Photos tab signed in as `email`, preferring the given one. Never substitutes another account. */
+  async liveTabFor(email: string, preferredTabId: number | null): Promise<number> {
+    const candidates = Object.values(await this.all()).filter((t) => t.account?.email === email);
+    const preferred = candidates.find((t) => t.tabId === preferredTabId);
+    for (const t of preferred ? [preferred, ...candidates] : candidates) {
+      try {
+        await chrome.tabs.get(t.tabId);
+        return t.tabId;
+      } catch {
+        await this.remove(t.tabId); // stale entry for a closed tab
+      }
+    }
+    throw new PixError(ErrorCode.TabNotBound, `No open Google Photos tab is signed in as ${email}. Open photos.google.com with that account and retry.`, { email });
+  }
+
+  /** Accounts with a live, signed-in Photos tab, each once. */
+  async liveAccounts(): Promise<AccountRef[]> {
+    const out = new Map<string, AccountRef>();
+    for (const t of Object.values(await this.all())) {
+      if (!t.account || out.has(t.account.email)) continue;
+      try {
+        await chrome.tabs.get(t.tabId);
+        out.set(t.account.email, t.account);
+      } catch {
+        await this.remove(t.tabId);
+      }
+    }
+    return [...out.values()];
+  }
+}
+
+/** One account's library for the Local API, through its Photos tab (the sign-in stays there, ADR-0001). */
+class TabLibrary implements ApiLibrary {
+  constructor(private readonly tabs: TabRegistry, private readonly email: string) {}
+
+  getItem(mediaKey: string) { return this.call({ type: "photos.getItem", mediaKey }); }
+  getItemDetails(mediaKey: string) { return this.call({ type: "photos.getItemDetails", mediaKey }); }
+  readItemInfo(mediaKeys: string[]) { return this.call({ type: "photos.readItemInfo", mediaKeys }); }
+  search(query: string, page: string | null): Promise<Page<LibraryItem>> { return this.call({ type: "photos.search", query, page }); }
+  listLibrary(page: string | null, startMs: number | null) { return this.call({ type: "photos.listLibrary", page, startMs }); }
+  listAlbums(page: string | null) { return this.call({ type: "photos.listAlbums", page }); }
+  listAlbumItems(albumKey: string, page: string | null) { return this.call({ type: "photos.listAlbumItems", albumKey, page }); }
+
+  async downloadOriginal(mediaKey: string) {
+    const r = await this.call({ type: "photos.downloadOriginal", mediaKey });
+    return { bytes: Base64.decode(r.bytesBase64), mimeType: r.mimeType };
+  }
+
+  async thumbnail(baseUrl: string, maxSide: number) {
+    const r = await this.call({ type: "photos.thumbnail", baseUrl, maxSide });
+    return { bytes: Base64.decode(r.bytesBase64), mimeType: r.mimeType };
+  }
+
+  private async call<K extends keyof ReplyMap>(req: { type: K } & Record<string, unknown>): Promise<ReplyMap[K]> {
+    const tabId = await this.tabs.liveTabFor(this.email, null);
+    return Messenger.toPhotosTab<K>(tabId, { ...req, expectedEmail: this.email } as unknown as PageToContent & { type: K });
+  }
 }
 
 class BackgroundRouter {
-  constructor(private readonly tabs: TabRegistry) {}
+  constructor(private readonly tabs: TabRegistry, private readonly api: NativeApiBridge) {}
 
   register(): void {
     chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
@@ -44,6 +106,10 @@ class BackgroundRouter {
     });
     chrome.tabs.onRemoved.addListener((tabId) => void this.tabs.remove(tabId));
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err: unknown) => console.error("[pixlixir] setPanelBehavior failed", err));
+
+    // Paragraph: the Local API comes back on with Chrome, and whenever this worker wakes, if it is switched on.
+    chrome.runtime.onStartup.addListener(() => void this.api.ensure());
+    void this.api.ensure();
   }
 
   private async route(raw: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
@@ -82,6 +148,14 @@ class BackgroundRouter {
           return null;
         case "panel.accounts":
           return { emails: [...new Set(Object.values(await this.tabs.all()).flatMap((t) => (t.account ? [t.account.email] : [])))] };
+        case "api.getState":
+          return this.api.state();
+        case "api.setEnabled":
+          return this.api.setEnabled(msg.enabled);
+        case "api.setPort":
+          return this.api.setPort(msg.port);
+        case "api.newKey":
+          return this.api.newKey();
       }
     }
 
@@ -138,19 +212,15 @@ class BackgroundRouter {
 
   /** Finds a live Photos tab signed in as `email`, preferring the original one. Never substitutes another account. */
   private async resolveTab(email: string, preferredTabId: number | null): Promise<{ tabId: number }> {
-    const all = await this.tabs.all();
-    const candidates = Object.values(all).filter((t) => t.account?.email === email);
-    const preferred = candidates.find((t) => t.tabId === preferredTabId);
-    for (const t of preferred ? [preferred, ...candidates] : candidates) {
-      try {
-        await chrome.tabs.get(t.tabId);
-        return { tabId: t.tabId };
-      } catch {
-        await this.tabs.remove(t.tabId); // stale entry for a closed tab
-      }
-    }
-    throw new PixError(ErrorCode.TabNotBound, `No open Google Photos tab is signed in as ${email}. Open photos.google.com with that account and retry.`, { email });
+    return { tabId: await this.tabs.liveTabFor(email, preferredTabId) };
   }
 }
 
-new BackgroundRouter(new TabRegistry()).register();
+// Paragraph: the tab registry, the Local API behind it, and the router.
+const tabs = new TabRegistry();
+const directory: AccountDirectory = { accounts: () => tabs.liveAccounts(), library: (account) => new TabLibrary(tabs, account.email) };
+const version = chrome.runtime.getManifest().version;
+const holder: { bridge: NativeApiBridge | null } = { bridge: null };
+const service = new LocalApiService(directory, { pixlixir: version, helper: () => holder.bridge?.helperVersion ?? null });
+holder.bridge = new NativeApiBridge(new ApiConfigStore(), service, version);
+new BackgroundRouter(tabs, holder.bridge).register();

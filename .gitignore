@@ -9,3 +9,5 @@ captures/
 dist-probe/
 vendor/
 dist-release/
+/pixlixir-helper-*
+helper/pixlixir-helper*

@@ -1,0 +1,447 @@
+openapi: 3.1.0
+info:
+  title: Pixlixir Local API
+  version: 1.0.0
+  summary: Read-only access to your Google Photos library from programs on this computer.
+  description: |
+    Pixlixir's Local API lets programs on the same computer read the Google Photos library of the
+    account signed in to Chrome, through the Pixlixir extension. It is **read-only**: nothing in the
+    library can be changed through it.
+
+    **Turning it on.** Install the helper once (Pixlixir Settings > Local API shows the command), then
+    switch **Local API** on in Settings. Settings shows the address and the key. The API answers only
+    while Chrome is running with Pixlixir, and a Google Photos tab (photos.google.com) is open and
+    signed in: the sign-in stays inside that tab.
+
+    **Security.** The helper listens on 127.0.0.1 only. Every request needs the key from Settings as
+    `Authorization: Bearer <key>`. Requests sent by web pages (any request with an `Origin` header, or
+    a `Host` other than 127.0.0.1 or localhost) are refused, so websites you visit cannot use it.
+
+    **Accounts.** With one account open in Photos, it is used. With several, pass `account` (the email);
+    without it the request fails with `409 ACCOUNT_REQUIRED`.
+
+    **Times.** `takenAt` is the capture time in the place it was taken, in RFC 3339 with that place's
+    offset (for example `2019-07-14T09:03:00+03:00`). `takenAtMs` is the same instant in epoch
+    milliseconds.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: http://127.0.0.1:8765
+    description: Default address. The port can be changed in Pixlixir Settings.
+security:
+  - bearerKey: []
+tags:
+  - name: Status
+  - name: Items
+  - name: Albums
+
+paths:
+  /v1/status:
+    get:
+      tags: [Status]
+      operationId: getStatus
+      summary: Whether the API can answer, and which accounts are open.
+      responses:
+        "200":
+          description: The helper and Pixlixir are connected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/items:
+    get:
+      tags: [Items]
+      operationId: findItemsByFileName
+      summary: Find photos and videos by file name.
+      description: |
+        Uses Google Photos' own search, then checks each result's real file name, so only items whose
+        name matches are returned. Matching ignores letter case.
+
+        Google limits searches: Pixlixir sends at most one every 3 seconds per account, and reads at
+        most 3 pages of Google's results (300 items) per request. After Google refuses (seen after
+        about 20 searches in 25 seconds), finds answer `429 RATE_LIMITED` without asking Google for
+        5 minutes, then try once more; Google's own refusal can last much longer (over 50 minutes was
+        seen) and also affects searching on the Photos website. Keep finds to a few a minute.
+      parameters:
+        - name: fileName
+          in: query
+          required: true
+          description: The file name to find, for example `IMG_1234.jpg`. With `match=exact`, the extension may be left out (`IMG_1234` finds `IMG_1234.jpg` and `IMG_1234.heic`).
+          schema: { type: string, minLength: 1, maxLength: 255 }
+        - name: match
+          in: query
+          required: false
+          description: "`exact`: the whole name (extension optional). `prefix`: names that start with it. `contains`: names that contain it."
+          schema: { type: string, enum: [exact, prefix, contains], default: exact }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: The matching items, newest first. Empty when nothing matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+                  truncated:
+                    type: boolean
+                    description: True when more items matched than `limit`.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/items/{mediaKey}:
+    get:
+      tags: [Items]
+      operationId: getItem
+      summary: Everything known about one item.
+      parameters:
+        - $ref: "#/components/parameters/MediaKey"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: The item with its details.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemDetails" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/items/{mediaKey}/original:
+    get:
+      tags: [Items]
+      operationId: getOriginal
+      summary: The photo's original file, as stored in Google Photos.
+      description: Photos only for now; videos answer `501 NOT_SUPPORTED`.
+      parameters:
+        - $ref: "#/components/parameters/MediaKey"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: The file's bytes. `Content-Disposition` carries its file name.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: 'attachment; filename="IMG_1234.jpg"'
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "501": { $ref: "#/components/responses/NotSupported" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/items/{mediaKey}/thumbnail:
+    get:
+      tags: [Items]
+      operationId: getThumbnail
+      summary: A JPEG of the photo or video, resized to fit a square.
+      parameters:
+        - $ref: "#/components/parameters/MediaKey"
+        - name: size
+          in: query
+          required: false
+          description: Longest side in pixels.
+          schema: { type: integer, minimum: 64, maximum: 2048, default: 512 }
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: A JPEG no larger than `size` on its longest side.
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/library:
+    get:
+      tags: [Items]
+      operationId: listLibrary
+      summary: The library, newest first, a page at a time.
+      parameters:
+        - name: before
+          in: query
+          required: false
+          description: Start with items taken at or before this time (RFC 3339). Ignored when `pageToken` is given.
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/PageToken"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: One page. File names are not included here; use `GET /v1/items/{mediaKey}`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/albums:
+    get:
+      tags: [Albums]
+      operationId: listAlbums
+      summary: The account's albums, a page at a time.
+      parameters:
+        - $ref: "#/components/parameters/PageToken"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: One page of albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [albums, nextPageToken]
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+                  nextPageToken: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/albums/{albumKey}/items:
+    get:
+      tags: [Albums]
+      operationId: listAlbumItems
+      summary: The items in one album, a page at a time.
+      parameters:
+        - name: albumKey
+          in: path
+          required: true
+          schema: { type: string, minLength: 10, maxLength: 200 }
+        - $ref: "#/components/parameters/PageToken"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: One page of the album's items.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+components:
+  securitySchemes:
+    bearerKey:
+      type: http
+      scheme: bearer
+      description: The key shown in Pixlixir Settings > Local API. Making a new key there stops the old one.
+
+  parameters:
+    Account:
+      name: account
+      in: query
+      required: false
+      description: The Google account's email. Needed only when more than one account is open in Google Photos.
+      schema: { type: string, format: email }
+    MediaKey:
+      name: mediaKey
+      in: path
+      required: true
+      description: The item's key, as returned by the other calls.
+      schema: { type: string, minLength: 10, maxLength: 200 }
+    PageToken:
+      name: pageToken
+      in: query
+      required: false
+      description: The `nextPageToken` of the previous page.
+      schema: { type: string, maxLength: 4096 }
+
+  schemas:
+    Status:
+      type: object
+      required: [apiVersion, pixlixirVersion, helperVersion, accounts]
+      properties:
+        apiVersion: { type: string, example: "1.0.0" }
+        pixlixirVersion: { type: string, example: "0.3.0" }
+        helperVersion: { type: string, example: "0.3.0" }
+        accounts:
+          type: array
+          description: Accounts with a signed-in Google Photos tab. Empty when none is open.
+          items: { type: string, format: email }
+
+    GeoPoint:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+
+    Item:
+      type: object
+      required: [mediaKey, type, fileName, width, height, takenAt, takenAtMs, timezoneOffsetMinutes, sizeBytes, webUrl]
+      properties:
+        mediaKey: { type: string, description: The item's key in this account. }
+        type: { type: string, enum: [photo, video, unknown] }
+        fileName: { type: [string, "null"], example: IMG_1234.jpg }
+        width: { type: integer, description: Pixels. }
+        height: { type: integer, description: Pixels. }
+        takenAt: { type: string, format: date-time, example: "2019-07-14T09:03:00+03:00" }
+        takenAtMs: { type: integer, format: int64, description: The same instant in epoch milliseconds. }
+        timezoneOffsetMinutes: { type: integer, description: Offset from UTC where it was taken. }
+        sizeBytes: { type: [integer, "null"], format: int64, description: File size, when Google reports it. }
+        webUrl: { type: string, format: uri, description: Opens the item in Google Photos. }
+
+    ItemDetails:
+      allOf:
+        - $ref: "#/components/schemas/Item"
+        - type: object
+          required: [description, albums, location, camera]
+          properties:
+            description: { type: string, description: The caption shown in Google Photos; empty when none. }
+            albums:
+              type: array
+              items: { $ref: "#/components/schemas/Album" }
+            location:
+              description: The place Google Photos shows for the item, if any.
+              oneOf:
+                - $ref: "#/components/schemas/GeoPoint"
+                - type: "null"
+            camera:
+              oneOf:
+                - type: object
+                  required: [make, model]
+                  properties:
+                    make: { type: [string, "null"] }
+                    model: { type: [string, "null"] }
+                - type: "null"
+
+    LibraryItem:
+      type: object
+      description: A listed item. Cheaper than `Item`, so it has no file name or size.
+      required: [mediaKey, type, width, height, takenAt, takenAtMs, timezoneOffsetMinutes, location, webUrl]
+      properties:
+        mediaKey: { type: string }
+        type: { type: string, enum: [photo, video, unknown] }
+        width: { type: integer }
+        height: { type: integer }
+        takenAt: { type: string, format: date-time }
+        takenAtMs: { type: integer, format: int64 }
+        timezoneOffsetMinutes: { type: integer }
+        location:
+          oneOf:
+            - $ref: "#/components/schemas/GeoPoint"
+            - type: "null"
+        webUrl: { type: string, format: uri }
+
+    LibraryPage:
+      type: object
+      required: [items, nextPageToken]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LibraryItem" }
+        nextPageToken:
+          type: [string, "null"]
+          description: Pass as `pageToken` for the next page; null on the last page.
+
+    Album:
+      type: object
+      required: [albumKey, title, shared]
+      properties:
+        albumKey: { type: string }
+        title: { type: string }
+        shared: { type: boolean, description: Visible to other people. }
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable, for programs to act on.
+          enum:
+            - BAD_REQUEST
+            - UNAUTHORIZED
+            - FORBIDDEN_ORIGIN
+            - NOT_FOUND
+            - ACCOUNT_REQUIRED
+            - RATE_LIMITED
+            - NOT_SUPPORTED
+            - NO_PHOTOS_TAB
+            - PIXLIXIR_NOT_CONNECTED
+            - GOOGLE_ERROR
+            - TIMEOUT
+            - INTERNAL
+        message: { type: string, description: For people; may change. }
+        details: { type: object, additionalProperties: true }
+
+  responses:
+    BadRequest:
+      description: A parameter is missing or invalid (`BAD_REQUEST`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: The key is missing or wrong (`UNAUTHORIZED`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: The request came from a web page (`FORBIDDEN_ORIGIN`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: No such item or album in this account (`NOT_FOUND`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    AccountRequired:
+      description: Several accounts are open; say which with `account` (`ACCOUNT_REQUIRED`). `details.accounts` lists them.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    RateLimited:
+      description: Google Photos is refusing searches for now (`RATE_LIMITED`). Wait `Retry-After` seconds; `details.retryAfterSeconds` says the same.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds to wait.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotSupported:
+      description: Not available yet for this kind of item (`NOT_SUPPORTED`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    GoogleError:
+      description: Google Photos refused or answered in an unexpected form (`GOOGLE_ERROR`). Retrying later may help.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unavailable:
+      description: No signed-in Google Photos tab is open, or none for the `account` asked for (`NO_PHOTOS_TAB`), or Pixlixir is not connected (`PIXLIXIR_NOT_CONNECTED`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Timeout:
+      description: Pixlixir did not answer in time (`TIMEOUT`, 60 s; 300 s for originals).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

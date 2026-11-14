@@ -9,6 +9,7 @@
 import { z } from "zod";
 import type { AlbumRef, CreatedMediaItem, ItemDetails, ItemFileInfo, LibraryItem, MediaItemInfo, Page } from "../../domain/types.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
+import type { ApiState } from "../api/native-bridge.js";
 import { MAX_SCAN_SELECTION, TOOL_IDS, TOOLS, type ToolId } from "../tools.js";
 
 // ---- shared schemas ---------------------------------------------------------
@@ -65,6 +66,10 @@ export const PageToBackground = z.discriminatedUnion("type", [
   z.object({ type: z.literal("panel.openScan"), tabId: z.number().int(), plan: ScanPlanSchema }),
   z.object({ type: z.literal("panel.openSettings"), tabId: z.number().int() }),
   z.object({ type: z.literal("panel.accounts") }),
+  z.object({ type: z.literal("api.getState") }),
+  z.object({ type: z.literal("api.setEnabled"), enabled: z.boolean() }),
+  z.object({ type: z.literal("api.setPort"), port: z.number().int().min(1024).max(65535) }),
+  z.object({ type: z.literal("api.newKey") }),
 ]);
 export type PageToBackground = z.infer<typeof PageToBackground>;
 
@@ -82,6 +87,7 @@ export const PageToContent = z.discriminatedUnion("type", [
     timezoneOffsetMs: z.number().optional(),
   }),
   z.object({ type: z.literal("photos.listLibrary"), expectedEmail: z.string(), page: PageTokenSchema, startMs: z.number().nullable() }),
+  z.object({ type: z.literal("photos.search"), expectedEmail: z.string(), query: z.string().min(1).max(255), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.listAlbums"), expectedEmail: z.string(), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.listAlbumItems"), expectedEmail: z.string(), albumKey: z.string().min(10), page: PageTokenSchema }),
   z.object({ type: z.literal("photos.getItemDetails"), expectedEmail: z.string(), mediaKey: z.string().min(10) }),
@@ -133,10 +139,15 @@ export interface ReplyMap {
   "panel.getState": PanelState;
   "panel.openTool": { editorTabId: number };
   "photos.resolveTab": { tabId: number };
+  "api.getState": ApiState;
+  "api.setEnabled": ApiState;
+  "api.setPort": ApiState;
+  "api.newKey": ApiState;
   "photos.getItem": MediaItemInfo;
   "photos.downloadOriginal": { bytesBase64: string; mimeType: string };
   "photos.uploadPhoto": CreatedMediaItem;
   "photos.listLibrary": Page<LibraryItem>;
+  "photos.search": Page<LibraryItem>;
   "photos.listAlbums": Page<AlbumRef>;
   "photos.listAlbumItems": Page<LibraryItem>;
   "photos.getItemDetails": ItemDetails;

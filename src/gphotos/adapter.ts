@@ -31,6 +31,8 @@ export interface PhotosLibraryAdapter {
 
   // ---- reading the library (read-only) ----
   listLibrary(cursor: LibraryCursor): Promise<Page<LibraryItem>>;
+  /** Google Photos' own search (the search box), one page at a time. */
+  search(query: string, page: string | null): Promise<Page<LibraryItem>>;
   listAlbums(page: string | null): Promise<Page<AlbumRef>>;
   listAlbumItems(albumKey: string, page: string | null): Promise<Page<LibraryItem>>;
   getItemDetails(mediaKey: string): Promise<ItemDetails>;

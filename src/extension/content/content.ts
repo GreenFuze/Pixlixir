@@ -79,6 +79,8 @@ class ContentApp {
       }
       case "photos.listLibrary":
         return adapter.listLibrary({ page: msg.page, startMs: msg.startMs });
+      case "photos.search":
+        return adapter.search(msg.query, msg.page);
       case "photos.listAlbums":
         return adapter.listAlbums(msg.page);
       case "photos.listAlbumItems":

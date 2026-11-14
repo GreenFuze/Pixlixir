@@ -5,7 +5,8 @@
  * extension's own CSP. Requires `npm run build` and `npx playwright install chromium`.
  */
 
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -633,6 +634,67 @@ describe("real extension", () => {
     expect({ w: uploaded.width, h: uploaded.height }).toEqual({ w: 384, h: 288 });
     expect(errors).toEqual([]);
     await editor.close();
+  });
+
+  it("serves the Local API through the real helper: find by name, details, files, refusals, on and off", async () => {
+    // Paragraph: build the helper from source and register it for this Pixlixir only, as the installer does.
+    const helper = path.join(profile, process.platform === "win32" ? "pixlixir-helper.exe" : "pixlixir-helper");
+    execFileSync("go", ["build", "-o", helper, "."], { cwd: path.resolve("helper"), stdio: "pipe" });
+    const manifest = path.join(profile, "NativeMessagingHosts", "com.greenfuze.pixlixir.json");
+    mkdirSync(path.dirname(manifest), { recursive: true });
+    writeFileSync(manifest, JSON.stringify({ name: "com.greenfuze.pixlixir", description: "test", path: helper, type: "stdio", allowed_origins: [`chrome-extension://${extensionId}/`] }));
+    // Windows reads registrations from the registry only; Linux and macOS also from the profile folder.
+    const regKey = "HKCU\\Software\\Chromium\\NativeMessagingHosts\\com.greenfuze.pixlixir";
+    if (process.platform === "win32") execFileSync("reg", ["add", regKey, "/ve", "/d", manifest, "/f"], { stdio: "pipe" });
+    try {
+      // Paragraph: a Photos tab, a free port, and the API switched on from an extension page.
+      const { page } = await openPhotos();
+      const port = 18000 + Math.floor(Math.random() * 2000);
+      expect(await asExtensionPage({ type: "api.setPort", port })).toMatchObject({ ok: true });
+      expect(await asExtensionPage({ type: "api.setEnabled", enabled: true })).toMatchObject({ ok: true });
+      type State = { state: string; problem: unknown; helperVersion: string | null; config: { key: string; port: number } };
+      const state = async () => ((await asExtensionPage({ type: "api.getState" })) as { value: State }).value;
+      await expect.poll(async () => (await state()).state, { timeout: 15_000 }).toBe("running");
+      const { key } = (await state()).config;
+      const base = `http://127.0.0.1:${port}`;
+      const get = (p: string, headers: Record<string, string> = { authorization: `Bearer ${key}` }) => fetch(base + p, { headers });
+
+      // Paragraph: status, and find by file name: Google's broad answer is narrowed to the real name.
+      expect(await (await get("/v1/status")).json()).toMatchObject({ apiVersion: "1.0.0", helperVersion: "dev", accounts: ["e2e@example.com"] });
+      const found = (await (await get("/v1/items?fileName=2022-12-02%20(3)")).json()) as { items: { mediaKey: string; fileName: string; takenAt: string }[]; truncated: boolean };
+      expect(found).toMatchObject({ truncated: false, items: [{ mediaKey: "AF1QipFAKELONE0000000", fileName: "2022-12-02 (3).jpg" }] });
+      expect((await (await get("/v1/items?fileName=nothing-like-this.jpg")).json()) as unknown).toEqual({ items: [], truncated: false });
+
+      // Paragraph: details, the original's exact bytes, a thumbnail, the library and albums.
+      expect(await (await get("/v1/items/AF1QipFAKELONE0000000")).json()).toMatchObject({ fileName: "2022-12-02 (3).jpg", description: "Harbour, morning", albums: [{ title: "Fake trip" }], camera: { make: "FakeCam" } });
+      const original = await get("/v1/items/AF1QipFAKELONE0000000/original");
+      expect(original.headers.get("content-disposition")).toContain("2022-12-02 (3).jpg");
+      expect(Buffer.from(await original.arrayBuffer()).equals(photos.find((p) => p.mediaKey === "AF1QipFAKELONE0000000")!.jpeg)).toBe(true);
+      const thumb = await get("/v1/items/AF1QipFAKELONE0000000/thumbnail?size=128");
+      expect(thumb.status).toBe(200);
+      expect(thumb.headers.get("content-type")).toMatch(/^image\//);
+      const library = (await (await get("/v1/library")).json()) as { items: unknown[]; nextPageToken: unknown };
+      expect(library.items.length).toBeGreaterThan(3);
+      expect(await (await get("/v1/albums")).json()).toMatchObject({ albums: [{ title: "Fake trip", shared: false }] });
+
+      // Paragraph: refusals: no key, a web page, a bad parameter, and Google refusing searches.
+      expect((await get("/v1/status", {})).status).toBe(401);
+      expect((await get("/v1/status", { authorization: `Bearer ${key}`, origin: "https://evil.example" })).status).toBe(403);
+      expect((await get("/v1/items?fileName=x&limit=0")).status).toBe(400);
+      fake.refuseSearches = true;
+      const limited = await get("/v1/items?fileName=IMG_1.jpg");
+      expect(limited.status).toBe(429);
+      expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(200);
+      fake.refuseSearches = false;
+      expect((await get("/v1/items?fileName=IMG_1.jpg")).status).toBe(429); // still paused: Google is not asked again
+
+      // Paragraph: switching off stops the helper and closes the port.
+      expect(await asExtensionPage({ type: "api.setEnabled", enabled: false })).toMatchObject({ ok: true });
+      await expect.poll(async () => { try { await get("/v1/status"); return "open"; } catch { return "closed"; } }, { timeout: 10_000 }).toBe("closed");
+      await page.close();
+    } finally {
+      if (process.platform === "win32") execFileSync("reg", ["delete", regKey, "/f"], { stdio: "pipe" });
+    }
   });
 
   it("refuses a scan frame that was not opened through the extension", async () => {

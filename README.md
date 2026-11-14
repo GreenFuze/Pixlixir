@@ -59,13 +59,20 @@ Review every change, apply in bulk, undo if you change your mind.
 ### 🪄 Edit with AI, Magic Eraser style
 Brush over what you want gone or changed, then pick **Erase, Fix, Unblur, Enhance or Replace**.
 Pixlixir prepares the request in the AI service you already use (ChatGPT, Gemini, Grok or one you
-add) or in a local engine like IOPaint on your own computer. No API keys. You bring the result
-back, compare it, and save it as a new photo.
+add) or in **Pixlixir AI**, a local eraser on your own computer that installs with one command. No
+API keys. You bring the result back, compare it, and save it as a new photo.
 
 ### 🔎 Upscale photos with AI
 Make small, old or grainy photos bigger and sharper, 2× or 4×, with an AI super-resolution model
 (Real-ESRGAN) that runs on your own graphics card. Choose how much film grain to keep, preview it
 up close, and save the result as a new photo. Nothing is uploaded anywhere.
+
+### 🔌 Local API for your own programs
+Switch on a **REST API on your computer** (127.0.0.1 only, with a key) and let your scripts and apps
+read your Google Photos library: find a photo by **file name**, get its date, place, camera, albums
+and description, download the original or a thumbnail, page through the library and albums.
+Read-only. Described in [OpenAPI](docs/api/openapi.yaml), so tools and AI assistants can use it
+directly. A small helper installs with one command from Settings.
 
 ### ⚡ Bulk operations
 One scan, many checks: duplicates, panoramas and wrong dates in a single pass over your library,
@@ -113,6 +120,55 @@ Needs Chrome 116 or newer. Other Chromium browsers (Edge, Brave) may work but ar
 **Updating:** run the same line again (or unzip the new zip over the same folder), then press ↻ on
 Pixlixir's card in `chrome://extensions`. Keep the folder where it is: Chrome ties your settings
 and saved scans to it, and a moved folder starts fresh.
+
+### Optional: Pixlixir AI, a local eraser for Edit
+
+Erase things in Edit on your own computer, with nothing sent anywhere. One line installs it (IOPaint
+with the LaMa model) into a single `Pixlixir-AI` folder with its own Python, uses your NVIDIA or Apple
+GPU when there is one, and starts it. Nothing else on your computer changes.
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/ai-install.ps1 | iex
+```
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/ai-install.sh | bash
+```
+
+Then in Pixlixir's **Settings**, press **Add to Edit**. Next time, start it from **Pixlixir AI** in
+the Start menu or Applications. It downloads up to 3 GB. Settings shows these commands too.
+
+### Uninstall
+
+Pixlixir: run the line below, then press **Remove** on Pixlixir's card in `chrome://extensions` (that
+also deletes its settings and saved scans).
+
+```powershell
+irm https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/uninstall.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/uninstall.sh | bash
+```
+
+Pixlixir AI: this stops it and removes its folder and launcher, and nothing else.
+
+```powershell
+irm https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/ai-uninstall.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install/ai-uninstall.sh | bash
+```
+
+### Optional: the Local API helper
+
+Settings > Local API shows a one-line install command with your Pixlixir's ID filled in, and the
+matching uninstall command. Then switch **Local API** on there. See [the API](docs/api/openapi.yaml).
 
 ## ⚠️ Good to know
 
@@ -185,6 +241,7 @@ delete similar photos, Google Photos panorama maker, photo stitching, split scan
 scanner, album page splitter, restore old photos, fix photo dates, wrong date Google Photos, EXIF
 date fixer, WhatsApp photo dates, bulk edit Google Photos, Magic Eraser for desktop, AI photo
 editor, AI photo upscaler, image upscaling, super resolution, enhance old photos, Real-ESRGAN,
-Google Photos web tools, Chrome extension, photo library cleanup.</sub>
+Google Photos web tools, Google Photos API, Google Photos REST API, search Google Photos by file name,
+Chrome extension, photo library cleanup.</sub>
 
 <sub>Google Photos is a trademark of Google LLC. Pixlixir is not affiliated with, endorsed by, or sponsored by Google.</sub>

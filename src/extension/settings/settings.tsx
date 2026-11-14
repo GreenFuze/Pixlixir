@@ -5,8 +5,10 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { FilenameFormat, FilenameFormats, type FilenameFormatEntry } from "../../scan/filename-format.js";
 import { ErrorCode, PixError, type SerializedError } from "../../shared/errors.js";
 import { BUILT_IN_SERVICES, ServiceStore, type AiService } from "../editor/edit/ai-services.js";
-import { ENGINE_KINDS, EngineCommands, LocalAddress, type EngineDevice, type EngineKind } from "../editor/edit/local-engines.js";
+import { ENGINE_KINDS, EngineCommands, LocalAddress, PixlixirAi, type DesktopOs, type EngineDevice, type EngineKind } from "../editor/edit/local-engines.js";
 import { ErrorBox } from "../editor/editor-ui.js";
+import { HelperCommands } from "../api/helper-commands.js";
+import type { ApiState } from "../api/native-bridge.js";
 import { Messenger } from "../messaging/protocol.js";
 import { FormatStore } from "../storage/format-store.js";
 
@@ -171,7 +173,7 @@ function CommandRow(props: { label: string; title: string; command: string }) {
   return (
     <li>
       <span class="muted" title={props.title}>{props.label}</span>
-      <code>{props.command}</code>
+      <code title={props.command}>{props.command}</code>
       <button class="btn small" onClick={() => void navigator.clipboard.writeText(props.command).then(() => setCopied(true))}>{copied ? "Copied" : "Copy"}</button>
     </li>
   );
@@ -214,6 +216,45 @@ function EngineSetup(props: { kind: EngineKind; address: string }) {
   );
 }
 
+/** Pixlixir AI: one command to install the local engine, one to remove it, and adding it once it runs. */
+function PixlixirAiSetup(props: { added: boolean; onAdd: () => Promise<void> }) {
+  const platform = (navigator as Navigator & { userAgentData?: { platform: string } }).userAgentData?.platform ?? navigator.platform;
+  const [os, setOs] = useState<DesktopOs>(PixlixirAi.osOf(platform));
+  const [running, setRunning] = useState<boolean | null>(null);
+  const commands = PixlixirAi.commands(os);
+  const terminal = os === "windows" ? "PowerShell" : "Terminal";
+
+  // Paragraph: whether it answers, read again every few seconds while this page is open.
+  useEffect(() => {
+    const stop = new AbortController();
+    const check = () => void PixlixirAi.running(stop.signal).then(setRunning, () => {});
+    check();
+    const timer = setInterval(check, 4000);
+    return () => { clearInterval(timer); stop.abort(); };
+  }, []);
+
+  return (
+    <div class="engine-setup">
+      <div class="row between">
+        <strong title={`Erase on this computer: IOPaint with the LaMa model, in one folder with its own Python. Nothing else on the computer changes. Paste a command into ${terminal}`}>Pixlixir AI</strong>
+        <span class="row">
+          {running !== null && <span class={`pill ${running ? "ok" : ""}`} title={running ? PixlixirAi.ADDRESS : "Not running. After installing, start it from the Start menu or Applications"}>{running ? "Running" : "Off"}</span>}
+          <select aria-label="System" value={os} onChange={(e) => setOs((e.target as HTMLSelectElement).value as DesktopOs)}>
+            <option value="windows">Windows</option>
+            <option value="mac">macOS</option>
+            <option value="linux">Linux</option>
+          </select>
+        </span>
+      </div>
+      <ul class="formats ai-commands">
+        <CommandRow label="Install" title={`Paste into ${terminal}. Downloads up to 3 GB, then starts it`} command={commands.install} />
+        <CommandRow label="Uninstall" title={`Paste into ${terminal}. Stops it and removes everything it installed`} command={commands.uninstall} />
+      </ul>
+      {!props.added && <button class="btn small" title={`Adds ${PixlixirAi.ADDRESS} to your engines`} disabled={!running} onClick={() => void props.onAdd()}>Add to Edit</button>}
+    </div>
+  );
+}
+
 /** Local engines for Edit: servers the user runs themselves, by kind and address. */
 function Engines(props: { email: string }) {
   const store = useMemo(() => new ServiceStore(props.email), [props.email]);
@@ -244,10 +285,22 @@ function Engines(props: { email: string }) {
     }
   };
 
+  const addPixlixirAi = async () => {
+    try {
+      if (!(await LocalAddress.request(PixlixirAi.ADDRESS))) throw new PixError(ErrorCode.InvalidService, "Permission to reach Pixlixir AI was refused", { address: PixlixirAi.ADDRESS });
+      await store.addEngine(PixlixirAi.NAME, PixlixirAi.ADDRESS, "iopaint");
+      setError(null);
+      await reload();
+    } catch (err) {
+      setError(failure(err));
+    }
+  };
+
   return (
     <section class="card">
       <div class="list-head"><strong title="Image servers you run yourself. The picture goes only to the address you give, and a result reaches Google Photos only if you save it">Local engines</strong></div>
       {error && <ErrorBox error={error} />}
+      <PixlixirAiSetup added={engines.some((s) => s.url === PixlixirAi.ADDRESS)} onAdd={addPixlixirAi} />
       <ul class="formats engine-kinds" aria-label="Supported engines">
         {ENGINE_KINDS.map((k) => (
           <li key={k.id}>
@@ -282,6 +335,91 @@ function Engines(props: { email: string }) {
   );
 }
 
+const API_STATE_LABEL: Record<ApiState["state"], string> = { off: "Off", starting: "Starting", running: "Running", failed: "Not running" };
+
+/** The Local API: switched on and off here; the helper it needs is installed once by a command (ADR-0012). */
+function LocalApi() {
+  const platform = (navigator as Navigator & { userAgentData?: { platform: string } }).userAgentData?.platform ?? navigator.platform;
+  const [os, setOs] = useState<DesktopOs>(PixlixirAi.osOf(platform));
+  const [api, setApi] = useState<ApiState | null>(null);
+  const [port, setPort] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<SerializedError | null>(null);
+  const commands = HelperCommands.commands(os, chrome.runtime.id);
+  const terminal = os === "windows" ? "PowerShell" : "Terminal";
+
+  // Paragraph: its state, read again every two seconds while this page is open.
+  useEffect(() => {
+    const read = () => Messenger.toBackground({ type: "api.getState" }).then(setApi, (err: unknown) => setError(failure(err)));
+    void read();
+    const timer = setInterval(() => void read(), 2000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => { if (api && port === "") setPort(String(api.config.port)); }, [api]);
+
+  const act = async (work: () => Promise<ApiState>) => {
+    try {
+      setApi(await work());
+      setError(null);
+    } catch (err) {
+      setError(failure(err));
+    }
+  };
+  const toggle = (on: boolean) => void act(async () => {
+    // Paragraph: Chrome asks once to allow Pixlixir to start a program; this must come from the click.
+    if (on && !(await chrome.permissions.request({ permissions: ["nativeMessaging"] }))) throw new PixError(ErrorCode.InvalidService, "Permission to start the helper was refused");
+    return Messenger.toBackground({ type: "api.setEnabled", enabled: on });
+  });
+  const address = api ? `http://127.0.0.1:${api.config.port}` : "";
+  const state = api?.state ?? "off";
+
+  return (
+    <section class="card">
+      <div class="list-head">
+        <strong title="Lets programs on this computer read your Google Photos through Pixlixir: find by file name, details, originals, albums. Read-only. Needs a Google Photos tab open">Local API</strong>
+        <span class="row">
+          {api && <span class={`pill ${state === "running" ? "ok" : state === "failed" ? "warn" : ""}`} title={api.problem?.message ?? (state === "running" ? `${api.served} requests answered` : "")}>{api.problem && state === "failed" ? api.problem.message : API_STATE_LABEL[state]}</span>}
+          <label class="opt" title="On: Chrome starts the helper. Off: it stops"><input type="checkbox" aria-label="Local API" checked={api?.config.enabled ?? false} disabled={!api} onChange={(e) => toggle((e.target as HTMLInputElement).checked)} />On</label>
+        </span>
+      </div>
+      {error && <ErrorBox error={error} />}
+      {api && (
+        <ul class="formats ai-commands">
+          <li>
+            <span class="muted" title="Where programs send requests">Address</span>
+            <code>{address}</code>
+            <input aria-label="Port" class="port" inputMode="numeric" value={port} onInput={(e) => setPort((e.target as HTMLInputElement).value)} />
+            <button class="btn small" title="Use this port" disabled={!/^\d{4,5}$/.test(port) || Number(port) === api.config.port || Number(port) < 1024 || Number(port) > 65535} onClick={() => void act(() => Messenger.toBackground({ type: "api.setPort", port: Number(port) }))}>Set</button>
+          </li>
+          <li>
+            <span class="muted" title="Programs send it as: Authorization: Bearer <key>">Key</span>
+            <code>{"•".repeat(16)}</code>
+            <button class="btn small" onClick={() => void navigator.clipboard.writeText(api.config.key).then(() => setCopied(true))}>{copied ? "Copied" : "Copy"}</button>
+            <button class="btn small" title="Make a new key. The old one stops working at once" onClick={() => { setCopied(false); void act(() => Messenger.toBackground({ type: "api.newKey" })); }}>New key</button>
+          </li>
+        </ul>
+      )}
+      <div class="engine-setup">
+        <div class="row between">
+          <span class="muted" title={`Install the helper once: paste the command into ${terminal}. It goes into one folder and is registered for this Pixlixir only`}>Helper</span>
+          <span class="row">
+            <a href={HelperCommands.OPENAPI_URL} target="_blank" rel="noreferrer" title="The API's description (OpenAPI), for the program that will use it">OpenAPI ↗</a>
+            <select aria-label="System" value={os} onChange={(e) => setOs((e.target as HTMLSelectElement).value as DesktopOs)}>
+              <option value="windows">Windows</option>
+              <option value="mac">macOS</option>
+              <option value="linux">Linux</option>
+            </select>
+          </span>
+        </div>
+        <ul class="formats ai-commands">
+          <CommandRow label="Install" title={`Paste into ${terminal}, then switch the API on`} command={commands.install} />
+          <CommandRow label="Uninstall" title={`Paste into ${terminal}. Removes the helper and its registration`} command={commands.uninstall} />
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const given = new URLSearchParams(location.search).get("email");
   const [accounts, setAccounts] = useState<string[] | null>(given ? [given] : null);
@@ -311,6 +449,7 @@ function App() {
       {email && <Formats key={email} email={email} />}
       {email && <Services key={`services-${email}`} email={email} />}
       {email && <Engines key={`engines-${email}`} email={email} />}
+      <LocalApi />
     </main>
   );
 }

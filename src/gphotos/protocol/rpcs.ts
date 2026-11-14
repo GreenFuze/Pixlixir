@@ -8,6 +8,7 @@
 
 import type { AlbumRef, GeoPoint, ItemDetails, LibraryItem, MediaType, Page, ItemFileInfo } from "../../domain/types.js";
 import type { BatchExecuteClient } from "./batchexecute.js";
+import { ErrorCode, PixError } from "../../shared/errors.js";
 import { PositionalReader } from "./positional.js";
 
 export const RpcId = {
@@ -24,6 +25,7 @@ export const RpcId = {
   bulkInfo: "EWgK9e",
   moveToTrash: "XwAOJf",
   listTrash: "zy0IHe",
+  search: "EzkLib",
 } as const;
 
 /** Ext-object key that marks video items (GPTK, observed in lcxiM/VrseUb). */
@@ -154,6 +156,27 @@ export class PhotosRpc {
     const r = new PositionalReader(RpcId.listLibrary, data);
     const rows = r.at([0]);
     return { items: Array.isArray(rows) ? rows.map((row) => ListingParser.item(RpcId.listLibrary, row)) : [], next: ListingParser.nextPage(r.at([1])) };
+  }
+
+  /**
+   * EzkLib — Google Photos' own search, as the search box runs it; rows like lcxiM's. Observed
+   * 2026-11-14 (read-only) on /u/1: mode 1 pages with a token (mode 2, the box's first call, has
+   * none). Google refuses with code 8 after about 20 searches in 25 s, and keeps refusing for minutes.
+   */
+  async search(query: string, pageId: string | null, pageSize = 100): Promise<Page<LibraryItem>> {
+    let data: unknown;
+    try {
+      data = await this.client.call(RpcId.search, [null, null, pageId, null, pageSize, null, 1, [query], 3, [1, 1]]);
+    } catch (err) {
+      const part = err instanceof PixError ? err.details?.errorPart : undefined;
+      if (err instanceof PixError && err.code === ErrorCode.RpcEnvelopeMissing && Array.isArray(part) && part[0] === 8) {
+        throw new PixError(ErrorCode.RateLimited, "Google Photos is refusing searches for now: too many in a short time.", { rpcId: RpcId.search }, { cause: err });
+      }
+      throw err;
+    }
+    const r = new PositionalReader(RpcId.search, data);
+    const rows = r.at([0]);
+    return { items: Array.isArray(rows) ? rows.map((row) => ListingParser.item(RpcId.search, row)) : [], next: ListingParser.nextPage(r.at([1])) };
   }
 
   /** Z5xsfc — the user's albums. Live-verified 2026-11-05 (read-only). */
