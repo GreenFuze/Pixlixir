@@ -237,3 +237,40 @@ export class LocalAddress {
     return chrome.permissions.request({ origins: [`${address}/*`] });
   }
 }
+
+export type DesktopOs = "windows" | "mac" | "linux";
+
+/**
+ * Pixlixir AI: IOPaint with LaMa, installed by one command into one folder with its own Python, and
+ * removed by another (scripts/install/ai-*.ps1 and ai-*.sh, ADR-0011). A browser cannot run them, so
+ * Settings shows them to copy.
+ */
+export class PixlixirAi {
+  static readonly NAME = "Pixlixir AI";
+  static readonly ADDRESS = "http://127.0.0.1:8080";
+  private static readonly BASE = "https://raw.githubusercontent.com/GreenFuze/Pixlixir/main/scripts/install";
+
+  static commands(os: DesktopOs): { install: string; uninstall: string } {
+    if (os === "windows") return { install: `irm ${PixlixirAi.BASE}/ai-install.ps1 | iex`, uninstall: `irm ${PixlixirAi.BASE}/ai-uninstall.ps1 | iex` };
+    return { install: `curl -fsSL ${PixlixirAi.BASE}/ai-install.sh | bash`, uninstall: `curl -fsSL ${PixlixirAi.BASE}/ai-uninstall.sh | bash` };
+  }
+
+  /** The system this browser runs on, from what it reports. */
+  static osOf(platform: string): DesktopOs {
+    const p = platform.toLowerCase();
+    if (p.includes("win")) return "windows";
+    if (p.includes("mac")) return "mac";
+    return "linux";
+  }
+
+  /** Whether the engine answers at its address. Needs permission to reach it. */
+  static async running(signal: AbortSignal): Promise<boolean> {
+    try {
+      return (await fetch(`${PixlixirAi.ADDRESS}/api/v1/server-config`, { signal })).ok;
+    } catch (err) {
+      // Paragraph: a refused connection means it is not running; a stop is passed on.
+      if (signal.aborted) throw err;
+      return false;
+    }
+  }
+}
