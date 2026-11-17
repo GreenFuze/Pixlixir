@@ -72,6 +72,8 @@ export interface ApiItem {
   takenAtMs: number;
   timezoneOffsetMinutes: number;
   sizeBytes: number | null;
+  /** Videos only, when Google's listing says. */
+  durationSec?: number;
   webUrl: string;
 }
 
@@ -88,16 +90,9 @@ export interface ApiItemDetails extends ApiItem {
   camera: { make: string | null; model: string | null } | null;
 }
 
-export interface ApiLibraryItem {
-  mediaKey: string;
-  type: MediaType;
-  width: number;
-  height: number;
-  takenAt: string;
-  takenAtMs: number;
-  timezoneOffsetMinutes: number;
+/** A listed item: the item's facts plus the place the listing shows. */
+export interface ApiLibraryItem extends ApiItem {
   location: GeoPoint | null;
-  webUrl: string;
 }
 
 export class ApiShapes {
@@ -114,19 +109,15 @@ export class ApiShapes {
     return { albumKey: a.mediaKey, title: a.title, shared: a.shared };
   }
 
-  static libraryItem(account: AccountRef, i: LibraryItem): ApiLibraryItem {
-    return {
-      mediaKey: i.mediaKey, type: i.type, width: i.width, height: i.height,
-      takenAt: ApiShapes.localTime(i.takenAtMs, i.timezoneOffsetMs), takenAtMs: i.takenAtMs, timezoneOffsetMinutes: Math.round(i.timezoneOffsetMs / 60_000),
-      location: i.location, webUrl: itemWebUrl(account, i.mediaKey),
-    };
+  static libraryItem(account: AccountRef, i: LibraryItem, file: { fileName: string | null; sizeBytes: number | null }): ApiLibraryItem {
+    return { ...ApiShapes.item(account, i, file), location: i.location };
   }
 
-  static item(account: AccountRef, i: Pick<LibraryItem, "mediaKey" | "type" | "width" | "height" | "takenAtMs" | "timezoneOffsetMs">, file: { fileName: string | null; sizeBytes: number | null }): ApiItem {
+  static item(account: AccountRef, i: Pick<LibraryItem, "mediaKey" | "type" | "width" | "height" | "takenAtMs" | "timezoneOffsetMs" | "durationMs">, file: { fileName: string | null; sizeBytes: number | null }): ApiItem {
     return {
       mediaKey: i.mediaKey, type: i.type, fileName: file.fileName, width: i.width, height: i.height,
       takenAt: ApiShapes.localTime(i.takenAtMs, i.timezoneOffsetMs), takenAtMs: i.takenAtMs, timezoneOffsetMinutes: Math.round(i.timezoneOffsetMs / 60_000),
-      sizeBytes: file.sizeBytes, webUrl: itemWebUrl(account, i.mediaKey),
+      sizeBytes: file.sizeBytes, ...(i.type === "video" && i.durationMs !== undefined ? { durationSec: Math.round(i.durationMs) / 1000 } : {}), webUrl: itemWebUrl(account, i.mediaKey),
     };
   }
 

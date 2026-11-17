@@ -72,7 +72,8 @@ Switch on a **REST API on your computer** (127.0.0.1 only, with a key) and let y
 read your Google Photos library: find a photo by **file name**, get its date, place, camera, albums
 and description, download the original or a thumbnail, page through the library and albums.
 Read-only. Described in [OpenAPI](docs/api/openapi.yaml), so tools and AI assistants can use it
-directly. A small helper installs with one command from Settings.
+directly. A small helper installs with one command from Settings, and doubles as an **MCP server** so
+Claude can search, look at and download your photos ([setup](docs/api/MCP.md)).
 
 ### ⚡ Bulk operations
 One scan, many checks: duplicates, panoramas and wrong dates in a single pass over your library,

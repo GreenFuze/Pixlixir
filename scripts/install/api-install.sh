@@ -62,3 +62,8 @@ done
 echo ""
 echo "The Pixlixir helper is installed in $DIR for Pixlixir $ID."
 echo "In Pixlixir: Settings > Local API, switch it on."
+
+# Paragraph: for Claude: the MCP server entry, with this computer's paths
+echo ""
+echo "For Claude (MCP): add this to Claude's claude_desktop_config.json, then restart Claude:"
+printf '{\n  "mcpServers": {\n    "pixlixir": {\n      "command": "%s",\n      "args": ["mcp"],\n      "env": { "PIXLIXIR_DOWNLOAD_ROOTS": "%s" }\n    }\n  }\n}\n' "$BIN" "$HOME/Downloads/Pixlixir"

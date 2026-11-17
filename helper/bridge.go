@@ -28,10 +28,22 @@ type BinaryHeader struct {
 }
 
 // Reply is Pixlixir's answer: JSON, or a file whose chunks arrive on Chunks (closed after the last).
+// Aborted is closed before Chunks when the file broke off part way.
 type Reply struct {
-	JSON   json.RawMessage
-	Binary *BinaryHeader
-	Chunks chan []byte
+	JSON    json.RawMessage
+	Binary  *BinaryHeader
+	Chunks  chan []byte
+	Aborted chan struct{}
+}
+
+// WasAborted says whether the file broke off; call it after Chunks is closed.
+func (r *Reply) WasAborted() bool {
+	select {
+	case <-r.Aborted:
+		return true
+	default:
+		return false
+	}
 }
 
 type incoming struct {
@@ -50,6 +62,7 @@ type pending struct {
 	reply   chan *Reply
 	fail    chan *APIError
 	chunks  chan []byte
+	aborted chan struct{}
 	nextSeq int
 }
 
@@ -120,6 +133,13 @@ func (b *Bridge) Deliver(raw json.RawMessage) error {
 		return b.deliverResponse(m, p)
 	case "chunk":
 		return b.deliverChunk(m, p)
+	case "abort":
+		b.forget(m.ID)
+		if p.chunks != nil {
+			close(p.aborted)
+			close(p.chunks)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unexpected message type %q from Pixlixir", m.Type)
 	}
@@ -136,7 +156,8 @@ func (b *Bridge) deliverResponse(m incoming, p *pending) error {
 	case m.Binary != nil:
 		// The chunks follow; the request stays registered until the last one.
 		p.chunks = make(chan []byte, 4)
-		p.reply <- &Reply{Binary: m.Binary, Chunks: p.chunks}
+		p.aborted = make(chan struct{})
+		p.reply <- &Reply{Binary: m.Binary, Chunks: p.chunks, Aborted: p.aborted}
 	default:
 		b.forget(m.ID)
 		p.reply <- &Reply{JSON: m.JSON}
@@ -171,6 +192,7 @@ func (b *Bridge) Close() {
 	b.closed = true
 	for id, p := range b.pending {
 		if p.chunks != nil {
+			close(p.aborted)
 			close(p.chunks)
 		} else {
 			p.fail <- errDisconnected

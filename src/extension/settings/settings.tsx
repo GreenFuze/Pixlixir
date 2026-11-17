@@ -8,7 +8,7 @@ import { BUILT_IN_SERVICES, ServiceStore, type AiService } from "../editor/edit/
 import { ENGINE_KINDS, EngineCommands, LocalAddress, PixlixirAi, type DesktopOs, type EngineDevice, type EngineKind } from "../editor/edit/local-engines.js";
 import { ErrorBox } from "../editor/editor-ui.js";
 import { HelperCommands } from "../api/helper-commands.js";
-import type { ApiState } from "../api/native-bridge.js";
+import { VIDEO_HOSTS, type ApiState } from "../api/native-bridge.js";
 import { Messenger } from "../messaging/protocol.js";
 import { FormatStore } from "../storage/format-store.js";
 
@@ -366,8 +366,8 @@ function LocalApi() {
     }
   };
   const toggle = (on: boolean) => void act(async () => {
-    // Paragraph: Chrome asks once to allow Pixlixir to start a program; this must come from the click.
-    if (on && !(await chrome.permissions.request({ permissions: ["nativeMessaging"] }))) throw new PixError(ErrorCode.InvalidService, "Permission to start the helper was refused");
+    // Paragraph: videos' originals come from Google's file hosts; Chrome asks once, from this click.
+    if (on) await chrome.permissions.request({ origins: VIDEO_HOSTS });
     return Messenger.toBackground({ type: "api.setEnabled", enabled: on });
   });
   const address = api ? `http://127.0.0.1:${api.config.port}` : "";

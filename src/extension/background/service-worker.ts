@@ -9,7 +9,9 @@ import type { AccountRef, LibraryItem, Page } from "../../domain/types.js";
 import { Base64 } from "../../shared/codec.js";
 import { ErrorCode, PixError } from "../../shared/errors.js";
 import { LocalApiService, type AccountDirectory, type ApiLibrary } from "../api/api-service.js";
-import { ApiConfigStore, NativeApiBridge } from "../api/native-bridge.js";
+import { ApiConfigStore, NativeApiBridge, VIDEO_HOSTS } from "../api/native-bridge.js";
+import { ApiError } from "../api/api-types.js";
+import { CONTENT_URL } from "../../gphotos/adapter.js";
 import { ContentToBackground, Messenger, PageToBackground, type PageToContent, type PanelState, type ReplyMap, type TabState } from "../messaging/protocol.js";
 import { SCAN_PAGE, SCAN_SELECTION_PREFIX, SETTINGS_PAGE, TOOLS, type ScanHandover, type ToolId } from "../tools.js";
 
@@ -83,6 +85,38 @@ class TabLibrary implements ApiLibrary {
   async downloadOriginal(mediaKey: string) {
     const r = await this.call({ type: "photos.downloadOriginal", mediaKey });
     return { bytes: Base64.decode(r.bytesBase64), mimeType: r.mimeType };
+  }
+
+  /**
+   * A video's original, read here rather than in the page: `=dv` redirects to a host the page may not
+   * read. Needs the video hosts allowed (asked when the API is switched on). Sent on as it arrives.
+   */
+  async downloadVideo(baseUrl: string) {
+    // Paragraph: only Google's own content address, and only with the hosts allowed.
+    if (!CONTENT_URL.test(baseUrl)) throw new ApiError("GOOGLE_ERROR", "The video's address is not one of Google's.", {});
+    if (!(await chrome.permissions.contains({ origins: VIDEO_HOSTS }))) {
+      throw new ApiError("NOT_SUPPORTED", "Video downloads are not allowed yet: in Pixlixir Settings, switch the Local API off and on, and allow it.", {});
+    }
+
+    // Paragraph: the file, with the browser's own sign-in cookies for those hosts.
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}=dv`, { credentials: "include" });
+    } catch (err) {
+      throw new ApiError("GOOGLE_ERROR", `Could not download the video: ${err instanceof Error ? err.message : String(err)}`, {});
+    }
+    const type = res.headers.get("content-type") ?? "";
+    if (!res.ok || !res.body || !type.startsWith("video/")) throw new ApiError("GOOGLE_ERROR", `Google did not send the video (HTTP ${res.status}, ${type || "no type"}).`, { status: res.status, type });
+    const length = Number(res.headers.get("content-length"));
+    const reader = res.body.getReader();
+    const chunks = (async function* () {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        yield value;
+      }
+    })();
+    return { mimeType: type.split(";")[0]!, size: Number.isFinite(length) && length > 0 ? length : null, chunks };
   }
 
   async thumbnail(baseUrl: string, maxSide: number) {

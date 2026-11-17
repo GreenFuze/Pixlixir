@@ -62,4 +62,11 @@
   Write-Host ""
   Write-Host "The Pixlixir helper is installed in $dir for Pixlixir $id." -ForegroundColor Green
   Write-Host "In Pixlixir: Settings > Local API, switch it on."
+
+  # Paragraph: for Claude: the MCP server entry, with this computer's paths
+  $roots = Join-Path $HOME 'Downloads\Pixlixir'
+  $entry = @{ mcpServers = @{ pixlixir = [ordered]@{ command = $exe; args = @('mcp'); env = @{ PIXLIXIR_DOWNLOAD_ROOTS = $roots } } } } | ConvertTo-Json -Depth 5
+  Write-Host ""
+  Write-Host "For Claude (MCP): add this to $env:APPDATA\Claude\claude_desktop_config.json, then restart Claude:"
+  Write-Host $entry
 }

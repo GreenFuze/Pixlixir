@@ -225,6 +225,7 @@ has its own module (`src/imaging/enhance`, `src/extension/editor/fix/`) behind a
 | ID | Feature | Phase | Status |
 |---|---|---|---|
 | A-20 | Local REST API through a helper Chrome starts: find by file name, details, originals, thumbnails, library and albums; read-only, key, 127.0.0.1 (ADR-0012, docs/api/openapi.yaml). Tested on a stand-in only | 3 | implemented |
+| A-21 | MCP server (`pixlixir-helper mcp`) for Claude: search, find by name, details, library, albums, thumbnails inline, downloads incl. videos; reads the key from the helper's connection file (ADR-0013, docs/api/MCP.md). People todo | 3 | implemented |
 | A-01 | Optional Go companion (native messaging) | 5 | todo |
 | A-02 | Localhost REST + MCP gateway (loopback, per-client auth, DNS-rebinding protection, rate limits) | 5 | todo |
 | A-03 | Read ops: list/search/get/download photo, metadata, similar, duplicates, albums | 5 | todo |

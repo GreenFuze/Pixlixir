@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +149,9 @@ func pixlixirStandIn(t *testing.T, ch *NativeChannel, file []byte) {
 }
 
 func TestWholeHelperOverTheNativeLink(t *testing.T) {
+	connFile := filepath.Join(t.TempDir(), "connection.json")
+	t.Setenv("PIXLIXIR_CONNECTION_FILE", connFile)
+
 	// Paragraph: two pipes stand in for Chrome's: helper <-> stand-in Pixlixir.
 	toHelperR, toHelperW := io.Pipe()
 	fromHelperR, fromHelperW := io.Pipe()
@@ -164,6 +169,9 @@ func TestWholeHelperOverTheNativeLink(t *testing.T) {
 		if err != nil || !strings.Contains(string(raw), want) {
 			t.Fatalf("wanted %s, got %s (%v)", want, raw, err)
 		}
+	}
+	if c, err := ReadConnection(); err != nil || c.Port != port || c.Key != testKey {
+		t.Fatalf("connection file: %+v %v", c, err)
 	}
 	file := bytes.Repeat([]byte{0xff, 0xd8, 7}, 100_000)
 	go pixlixirStandIn(t, pix, file)
@@ -204,9 +212,13 @@ func TestWholeHelperOverTheNativeLink(t *testing.T) {
 	if _, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/v1/status", port)); err == nil {
 		t.Fatal("the port is still open")
 	}
+	if _, err := os.Stat(connFile); !os.IsNotExist(err) {
+		t.Fatal("the connection file was left behind")
+	}
 }
 
 func TestPortInUseIsReported(t *testing.T) {
+	t.Setenv("PIXLIXIR_CONNECTION_FILE", filepath.Join(t.TempDir(), "connection.json"))
 	busy := NewServer(testKey, 18999, nil)
 	l, err := busy.Listen()
 	if err != nil {

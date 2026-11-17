@@ -28,6 +28,15 @@ type config struct {
 }
 
 func main() {
+	// Paragraph: "pixlixir-helper mcp" is the MCP server for Claude and other tools; anything else is
+	// Chrome starting the native host (it passes the caller's origin as the first argument).
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := runMCP(); err != nil {
+			fmt.Fprintln(os.Stderr, "pixlixir-helper mcp:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "pixlixir-helper:", err)
 		os.Exit(1)
@@ -73,6 +82,14 @@ func run(in io.Reader, out io.Writer) error {
 			os.Exit(1)
 		}
 	}()
+	// Paragraph: tell local tools where to call, and with which key, before saying it listens; the
+	// file goes when the helper stops.
+	connPath, err := WriteConnection(Connection{Port: cfg.Port, Key: cfg.Key, PID: os.Getpid(), HelperVersion: version})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pixlixir-helper: no connection file:", err)
+	} else {
+		defer RemoveConnection(connPath)
+	}
 	if err := ch.Write(map[string]any{"type": "listening", "port": cfg.Port}); err != nil {
 		return err
 	}

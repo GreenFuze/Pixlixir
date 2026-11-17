@@ -16,6 +16,7 @@ function libraryOf(mock: MockPhotosAdapter): ApiLibrary {
     search: (q, p) => mock.search(q, p), readItemInfo: (k) => mock.readItemInfo(k), getItem: (k) => mock.getItem(k), getItemDetails: (k) => mock.getItemDetails(k),
     listLibrary: (p, s) => mock.listLibrary({ page: p, startMs: s }), listAlbums: (p) => mock.listAlbums(p), listAlbumItems: (a, p) => mock.listAlbumItems(a, p),
     downloadOriginal: (k) => mock.downloadOriginal(k), thumbnail: (u, s) => mock.fetchThumbnail(u, s),
+    downloadVideo: async () => ({ mimeType: "video/mp4", size: 6, chunks: (async function* () { yield new Uint8Array([1, 2, 3]); yield new Uint8Array([4, 5, 6]); })() }),
   };
 }
 
@@ -53,21 +54,39 @@ describe("Local API", () => {
     expect(item).toMatchObject({ fileName: "IMG_1234.jpg", takenAt: "2019-07-14T09:04:00+03:00", timezoneOffsetMinutes: 180, sizeBytes: 1001, description: "Beach", albums: [{ albumKey: "AF1QipALBUM0000000", title: "Summer", shared: false }], camera: { make: "Canon", model: "EOS" }, webUrl: "https://photos.google.com/u/1/photo/AF1QipKEY10000000" });
   });
 
-  it("downloads an original with its name, and refuses a video", async () => {
+  it("downloads a photo's and a video's original with their names, the video in pieces", async () => {
     const { api } = setup();
-    expect(await api.handle({ op: "items.original", params: { mediaKey: "AF1QipKEY10000000" } })).toMatchObject({ kind: "binary", mimeType: "image/jpeg", fileName: "IMG_1234.jpg" });
-    await expect(api.handle({ op: "items.original", params: { mediaKey: "AF1QipKEY50000000" } })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    expect(await api.handle({ op: "items.original", params: { mediaKey: "AF1QipKEY10000000" } })).toMatchObject({ kind: "binary", mimeType: "image/jpeg", fileName: "IMG_1234.jpg", size: 4 });
+    const video = (await api.handle({ op: "items.original", params: { mediaKey: "AF1QipKEY50000000" } })) as { chunks: AsyncIterable<Uint8Array>; fileName: string; mimeType: string };
+    expect(video).toMatchObject({ fileName: "clip.mp4", mimeType: "video/mp4" });
+    const got: number[] = [];
+    for await (const c of video.chunks) got.push(...c);
+    expect(got).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
-  it("pages the library and albums", async () => {
+  it("pages the library with file names, by any limit, from a time, down to a time, by kind", async () => {
     const { api } = setup();
-    const first = await body(api.handle({ op: "library.list", params: {} }));
-    expect(first.items).toHaveLength(3);
-    const second = await body(api.handle({ op: "library.list", params: { pageToken: first.nextPageToken as string } }));
-    expect(second.items).toHaveLength(2);
-    expect(second.nextPageToken).toBeNull();
-    const before = await body(api.handle({ op: "library.list", params: { before: "2019-07-14T09:04:30+03:00" } }));
-    expect((before.items as { mediaKey: string }[]).map((i) => i.mediaKey)).toEqual(["AF1QipKEY10000000"]);
+    const first = await body(api.handle({ op: "library.list", params: { limit: "2" } }));
+    expect((first.items as { fileName: string }[]).map((i) => i.fileName)).toEqual(["clip.mp4", "holiday IMG_1234 copy.jpg"]);
+    const second = await body(api.handle({ op: "library.list", params: { limit: "2", pageToken: first.nextPageToken as string } }));
+    const third = await body(api.handle({ op: "library.list", params: { limit: "2", pageToken: second.nextPageToken as string } }));
+    expect([...(second.items as { mediaKey: string }[]), ...(third.items as { mediaKey: string }[])].map((i) => i.mediaKey)).toEqual(["AF1QipKEY30000000", "AF1QipKEY20000000", "AF1QipKEY10000000"]);
+    expect(third.nextPageToken).toBeNull();
+    const window = await body(api.handle({ op: "library.list", params: { before: "2019-07-14T09:06:30+03:00", after: "2019-07-14T09:04:30+03:00" } }));
+    expect((window.items as { mediaKey: string }[]).map((i) => i.mediaKey)).toEqual(["AF1QipKEY30000000", "AF1QipKEY20000000"]);
+    const videos = await body(api.handle({ op: "library.list", params: { mediaType: "video" } }));
+    expect((videos.items as { type: string }[]).map((i) => i.type)).toEqual(["video"]);
+    await expect(api.handle({ op: "library.list", params: { pageToken: "not-a-token" } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("searches like the search box, filtered by kind and time, with file names", async () => {
+    const { api } = setup();
+    const all = await body(api.handle({ op: "search", params: { query: "IMG_1234" } }));
+    expect((all.items as { fileName: string }[]).map((i) => i.fileName)).toEqual(["holiday IMG_1234 copy.jpg", "IMG_12345.jpg", "IMG_1234.HEIC", "IMG_1234.jpg"]);
+    const videos = await body(api.handle({ op: "search", params: { query: "clip", mediaType: "video" } }));
+    expect(videos.items).toHaveLength(1);
+    const early = await body(api.handle({ op: "search", params: { query: "IMG", to: "2019-07-14T09:05:30+03:00" } }));
+    expect((early.items as { mediaKey: string }[]).map((i) => i.mediaKey)).toEqual(["AF1QipKEY20000000", "AF1QipKEY10000000"]);
   });
 
   it("refuses bad requests, unknown items and unclear accounts with stable codes", async () => {
@@ -111,8 +130,23 @@ describe("FileNameMatcher and ApiShapes", () => {
     expect(new FileNameMatcher("IMG", "prefix").matches(null)).toBe(false);
   });
 
+  it("gives a video its length in seconds, and a photo none", () => {
+    const base = { mediaKey: "AF1QipKEY", width: 1, height: 1, takenAtMs: 0, timezoneOffsetMs: 0, durationMs: 17_899 };
+    expect(ApiShapes.item(ME, { ...base, type: "video" }, { fileName: null, sizeBytes: null })).toMatchObject({ durationSec: 17.899 });
+    expect(ApiShapes.item(ME, { ...base, type: "photo" }, { fileName: null, sizeBytes: null })).not.toHaveProperty("durationSec");
+  });
+
   it("writes local times with their offset, west and east", () => {
     expect(ApiShapes.localTime(Date.UTC(2020, 0, 1, 2, 0), -5 * 3_600_000)).toBe("2019-12-31T21:00:00-05:00");
     expect(ApiShapes.localTime(Date.UTC(2020, 0, 1, 2, 0), 5.5 * 3_600_000)).toBe("2020-01-01T07:30:00+05:30");
+  });
+});
+
+describe("Manifest", () => {
+  it("asks for native messaging up front: granted later, connectNative only appears after a reload", async () => {
+    const { readFileSync } = await import("node:fs");
+    const manifest = JSON.parse(readFileSync("src/extension/manifest.json", "utf-8")) as { permissions: string[]; optional_permissions: string[] };
+    expect(manifest.permissions).toContain("nativeMessaging");
+    expect(manifest.optional_permissions).not.toContain("nativeMessaging");
   });
 });

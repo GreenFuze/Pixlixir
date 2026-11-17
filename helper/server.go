@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	jsonTimeout = 60 * time.Second
-	fileTimeout = 300 * time.Second
+	jsonTimeout   = 60 * time.Second
+	searchTimeout = 120 * time.Second
+	fileTimeout   = 300 * time.Second
 )
 
 // Requester is what the server needs from the bridge.
@@ -38,6 +39,7 @@ func NewServer(key string, port int, bridge Requester) *Server {
 	// Paragraph: the routes, each with its operation and path parameters.
 	s.route("GET /v1/status", "status", nil, jsonTimeout)
 	s.route("GET /v1/items", "items.find", nil, jsonTimeout)
+	s.route("GET /v1/search", "search", nil, searchTimeout)
 	s.route("GET /v1/items/{mediaKey}", "items.get", []string{"mediaKey"}, jsonTimeout)
 	s.route("GET /v1/items/{mediaKey}/original", "items.original", []string{"mediaKey"}, fileTimeout)
 	s.route("GET /v1/items/{mediaKey}/thumbnail", "items.thumbnail", []string{"mediaKey"}, jsonTimeout)
@@ -112,7 +114,9 @@ func (s *Server) Listen() (net.Listener, error) {
 func writeFile(w http.ResponseWriter, reply *Reply) {
 	h := reply.Binary
 	w.Header().Set("Content-Type", h.MimeType)
-	w.Header().Set("Content-Length", strconv.FormatInt(h.Size, 10))
+	if h.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(h.Size, 10))
+	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": h.FileName}))
 	w.WriteHeader(http.StatusOK)
 
@@ -129,8 +133,8 @@ func writeFile(w http.ResponseWriter, reply *Reply) {
 		}
 		written += int64(len(chunk))
 	}
-	if !broken && written != h.Size {
-		// The status is already sent; a short body tells the caller it was cut.
+	if !broken && (reply.WasAborted() || (h.Size >= 0 && written != h.Size)) {
+		// The status is already sent; cutting the connection tells the caller the file is incomplete.
 		panic(http.ErrAbortHandler)
 	}
 }

@@ -16,6 +16,12 @@ import { Base64 } from "../../shared/codec.js";
 import { ApiError } from "./api-types.js";
 import type { LocalApiService } from "./api-service.js";
 
+/**
+ * Where Google serves a video's original (`=dv` redirects off photos.google.com, to hosts that do not
+ * let the page read the file). Pixlixir asks for these when the API is switched on.
+ */
+export const VIDEO_HOSTS = ["https://*.googleusercontent.com/*", "https://*.usercontent.google.com/*"];
+
 export interface ApiConfig {
   enabled: boolean;
   port: number;
@@ -85,12 +91,9 @@ export class NativeApiBridge {
 
   /** Starts the helper if the API is switched on and it is not running. Safe to call often. */
   async ensure(): Promise<void> {
+    // nativeMessaging is a required permission: granted later, connectNative only appears after a reload.
     const config = await this.store.load();
     if (!config.enabled || this.#port) return;
-    if (!(await chrome.permissions.contains({ permissions: ["nativeMessaging"] }))) {
-      this.#state = { config, state: "failed", problem: { code: "NO_PERMISSION", message: "Switch the API off and on again to allow it." }, helperVersion: null, served: 0 };
-      return;
-    }
     this.connect(config);
   }
 
@@ -128,7 +131,13 @@ export class NativeApiBridge {
     // Paragraph: Chrome starts the helper; anything it cannot do arrives as a disconnect.
     this.#stopping = false;
     this.#state = { config, state: "starting", problem: null, helperVersion: null, served: this.#state?.served ?? 0 };
-    const port = chrome.runtime.connectNative(NativeApiBridge.HOST);
+    let port: chrome.runtime.Port;
+    try {
+      port = chrome.runtime.connectNative(NativeApiBridge.HOST);
+    } catch (err) {
+      this.#state = { ...this.#state, state: "failed", problem: { code: "HELPER_NOT_STARTED", message: `Chrome could not start the helper: ${err instanceof Error ? err.message : String(err)}` } };
+      return;
+    }
     this.#port = port;
     port.onMessage.addListener((raw: unknown) => void this.onMessage(port, raw));
     port.onDisconnect.addListener(() => this.onDisconnect(port));
@@ -176,6 +185,36 @@ export class NativeApiBridge {
     }
   }
 
+  /**
+   * Sends a file as numbered chunks of about CHUNK_BYTES. If reading it fails after the header went
+   * out, an "abort" tells the helper to cut the HTTP answer, so a caller never takes it as complete.
+   */
+  private static async sendChunks(port: chrome.runtime.Port, id: number, chunks: AsyncIterable<Uint8Array>): Promise<void> {
+    let seq = 0;
+    let parts: Uint8Array[] = [];
+    let held = 0;
+    const flush = (last: boolean) => {
+      const out = new Uint8Array(held);
+      let at = 0;
+      for (const p of parts) { out.set(p, at); at += p.byteLength; }
+      port.postMessage({ type: "chunk", id, seq: seq++, data: Base64.encode(out), last });
+      parts = [];
+      held = 0;
+    };
+    try {
+      for await (const c of chunks) {
+        parts.push(c);
+        held += c.byteLength;
+        if (held >= NativeApiBridge.CHUNK_BYTES) flush(false);
+      }
+      flush(true);
+    } catch (err) {
+      const e = ApiError.from(err);
+      console.error("[pixlixir] Local API file stopped part way", e.toJSON());
+      port.postMessage({ type: "abort", id, error: e.toJSON() });
+    }
+  }
+
   /** Runs one request and sends the answer back, a file in pieces. */
   private async answer(port: chrome.runtime.Port, id: number, request: unknown): Promise<void> {
     try {
@@ -185,12 +224,8 @@ export class NativeApiBridge {
         port.postMessage({ type: "response", id, ok: true, json: result.body });
         return;
       }
-      port.postMessage({ type: "response", id, ok: true, binary: { mimeType: result.mimeType, fileName: result.fileName, size: result.bytes.byteLength } });
-      const total = Math.max(1, Math.ceil(result.bytes.byteLength / NativeApiBridge.CHUNK_BYTES));
-      for (let seq = 0; seq < total; seq++) {
-        const part = result.bytes.subarray(seq * NativeApiBridge.CHUNK_BYTES, (seq + 1) * NativeApiBridge.CHUNK_BYTES);
-        port.postMessage({ type: "chunk", id, seq, data: Base64.encode(part), last: seq === total - 1 });
-      }
+      port.postMessage({ type: "response", id, ok: true, binary: { mimeType: result.mimeType, fileName: result.fileName, size: result.size ?? -1 } });
+      await NativeApiBridge.sendChunks(port, id, result.chunks);
     } catch (err) {
       const e = ApiError.from(err);
       if (e.code === "INTERNAL") console.error("[pixlixir] Local API request failed", e.toJSON());

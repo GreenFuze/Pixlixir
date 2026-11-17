@@ -32,8 +32,8 @@ export class FileNameMatcher {
 
 /** Spaces searches out per account, and holds them all back for a while after Google refuses. */
 export class SearchGate {
-  /** At least this long between two searches. */
-  static readonly MIN_INTERVAL_MS = 3_000;
+  /** At least this long between two searches (Google locked search for over 50 min after a burst). */
+  static readonly MIN_INTERVAL_MS = 10_000;
   /** After a refusal, no search is sent for this long. */
   static readonly COOLDOWN_MS = 5 * 60_000;
 

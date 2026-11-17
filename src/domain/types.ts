@@ -59,6 +59,8 @@ export interface LibraryItem {
   location: GeoPoint | null;
   /** False for items in the library that belong to someone else (partner sharing). */
   editable?: boolean;
+  /** A video's length, when the listing says (observed 2026-11-14: within 0.05 s of what the file plays). */
+  durationMs?: number;
 }
 
 /** What a bulk read returns for an item. */

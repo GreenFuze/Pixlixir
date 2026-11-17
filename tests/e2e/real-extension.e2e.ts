@@ -664,6 +664,9 @@ describe("real extension", () => {
       const found = (await (await get("/v1/items?fileName=2022-12-02%20(3)")).json()) as { items: { mediaKey: string; fileName: string; takenAt: string }[]; truncated: boolean };
       expect(found).toMatchObject({ truncated: false, items: [{ mediaKey: "AF1QipFAKELONE0000000", fileName: "2022-12-02 (3).jpg" }] });
       expect((await (await get("/v1/items?fileName=nothing-like-this.jpg")).json()) as unknown).toEqual({ items: [], truncated: false });
+      const searched = (await (await get("/v1/search?query=2022-12-02&mediaType=photo")).json()) as { items: { fileName: string; takenAt: string }[] };
+      expect(searched.items.map((i) => i.fileName)).toContain("2022-12-02 (3).jpg");
+      expect(searched.items.every((i) => /[+-]\d\d:\d\d$/.test(i.takenAt))).toBe(true);
 
       // Paragraph: details, the original's exact bytes, a thumbnail, the library and albums.
       expect(await (await get("/v1/items/AF1QipFAKELONE0000000")).json()).toMatchObject({ fileName: "2022-12-02 (3).jpg", description: "Harbour, morning", albums: [{ title: "Fake trip" }], camera: { make: "FakeCam" } });

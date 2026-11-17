@@ -60,7 +60,13 @@ export class ListingParser {
       type: ext && VIDEO_EXT_KEY in ext ? "video" : "photo",
       location: ListingParser.geo(new PositionalReader(rpcId, ext).at([GEO_EXT_KEY, 1, 0])),
       editable: rpcId !== RpcId.listLibrary || !ListingParser.hasFlag(r.at([7]), NOT_OWNED_FLAG),
+      ...ListingParser.duration(new PositionalReader(rpcId, ext).at([VIDEO_EXT_KEY, 0])),
     };
+  }
+
+  /** A video's length in ms sits first in its video data (read-only, 2026-11-14). */
+  static duration(v: unknown): { durationMs?: number } {
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? { durationMs: v } : {};
   }
 
   private static hasFlag(flags: unknown, flag: number): boolean {

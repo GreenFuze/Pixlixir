@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pixlixir Local API
-  version: 1.0.0
+  version: 1.1.0
   summary: Read-only access to your Google Photos library from programs on this computer.
   description: |
     Pixlixir's Local API lets programs on the same computer read the Google Photos library of the
@@ -19,6 +19,9 @@ info:
 
     **Accounts.** With one account open in Photos, it is used. With several, pass `account` (the email);
     without it the request fails with `409 ACCOUNT_REQUIRED`.
+
+    **MCP.** `pixlixir-helper mcp` is an MCP server (stdio) over this API, for Claude and other MCP
+    clients; see docs/api/MCP.md.
 
     **Times.** `takenAt` is the capture time in the place it was taken, in RFC 3339 with that place's
     offset (for example `2019-07-14T09:03:00+03:00`). `takenAtMs` is the same instant in epoch
@@ -61,7 +64,7 @@ paths:
         Uses Google Photos' own search, then checks each result's real file name, so only items whose
         name matches are returned. Matching ignores letter case.
 
-        Google limits searches: Pixlixir sends at most one every 3 seconds per account, and reads at
+        Google limits searches: Pixlixir sends at most one every 10 seconds per account, and reads at
         most 3 pages of Google's results (300 items) per request. After Google refuses (seen after
         about 20 searches in 25 seconds), finds answer `429 RATE_LIMITED` without asking Google for
         5 minutes, then try once more; Google's own refusal can last much longer (over 50 minutes was
@@ -106,6 +109,53 @@ paths:
         "503": { $ref: "#/components/responses/Unavailable" }
         "504": { $ref: "#/components/responses/Timeout" }
 
+  /v1/search:
+    get:
+      tags: [Items]
+      operationId: searchPhotos
+      summary: Search like Google Photos' search box.
+      description: |
+        Free text, exactly as typed in the search box: people's names, places, things, dates, "videos".
+        Results can be narrowed by kind and time. Searches are rationed (at most one every 10 seconds
+        per account; see findItemsByFileName), and one request reads at most 2 of Google's pages.
+        A page can hold fewer than `limit` items when filters drop some; follow `nextPageToken`.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+        - $ref: "#/components/parameters/MediaType"
+        - name: from
+          in: query
+          required: false
+          description: Keep items taken at or after this time (RFC 3339).
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          description: Keep items taken at or before this time (RFC 3339).
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - $ref: "#/components/parameters/PageToken"
+        - $ref: "#/components/parameters/Account"
+      responses:
+        "200":
+          description: One page of results, in Google's order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/AccountRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/GoogleError" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
   /v1/items/{mediaKey}:
     get:
       tags: [Items]
@@ -132,8 +182,11 @@ paths:
     get:
       tags: [Items]
       operationId: getOriginal
-      summary: The photo's original file, as stored in Google Photos.
-      description: Photos only for now; videos answer `501 NOT_SUPPORTED`.
+      summary: The original file of a photo or video, as stored in Google Photos.
+      description: |
+        Large files are streamed. A video's `Content-Length` may be missing; a file that breaks off
+        part way ends with a cut connection, never a short file that looks complete. Videos need
+        Pixlixir to be allowed Google's file hosts, which it asks when the API is switched on.
       parameters:
         - $ref: "#/components/parameters/MediaKey"
         - $ref: "#/components/parameters/Account"
@@ -146,6 +199,8 @@ paths:
               description: 'attachment; filename="IMG_1234.jpg"'
           content:
             image/*:
+              schema: { type: string, format: binary }
+            video/*:
               schema: { type: string, format: binary }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -187,18 +242,29 @@ paths:
     get:
       tags: [Items]
       operationId: listLibrary
-      summary: The library, newest first, a page at a time.
+      summary: The library, newest first, a page at a time, with file names.
+      description: Not rationed (does not use Google's search). A page can hold fewer than `limit` items when filters drop some.
       parameters:
         - name: before
           in: query
           required: false
           description: Start with items taken at or before this time (RFC 3339). Ignored when `pageToken` is given.
           schema: { type: string, format: date-time }
+        - name: after
+          in: query
+          required: false
+          description: Stop at items taken before this time (RFC 3339).
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/MediaType"
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
         - $ref: "#/components/parameters/PageToken"
         - $ref: "#/components/parameters/Account"
       responses:
         "200":
-          description: One page. File names are not included here; use `GET /v1/items/{mediaKey}`.
+          description: One page.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LibraryPage" }
@@ -284,6 +350,11 @@ components:
       required: true
       description: The item's key, as returned by the other calls.
       schema: { type: string, minLength: 10, maxLength: 200 }
+    MediaType:
+      name: mediaType
+      in: query
+      required: false
+      schema: { type: string, enum: [all, photo, video], default: all }
     PageToken:
       name: pageToken
       in: query
@@ -324,6 +395,7 @@ components:
         takenAtMs: { type: integer, format: int64, description: The same instant in epoch milliseconds. }
         timezoneOffsetMinutes: { type: integer, description: Offset from UTC where it was taken. }
         sizeBytes: { type: [integer, "null"], format: int64, description: File size, when Google reports it. }
+        durationSec: { type: number, description: Videos only, when Google's listing says. }
         webUrl: { type: string, format: uri, description: Opens the item in Google Photos. }
 
     ItemDetails:
@@ -351,22 +423,16 @@ components:
                 - type: "null"
 
     LibraryItem:
-      type: object
-      description: A listed item. Cheaper than `Item`, so it has no file name or size.
-      required: [mediaKey, type, width, height, takenAt, takenAtMs, timezoneOffsetMinutes, location, webUrl]
-      properties:
-        mediaKey: { type: string }
-        type: { type: string, enum: [photo, video, unknown] }
-        width: { type: integer }
-        height: { type: integer }
-        takenAt: { type: string, format: date-time }
-        takenAtMs: { type: integer, format: int64 }
-        timezoneOffsetMinutes: { type: integer }
-        location:
-          oneOf:
-            - $ref: "#/components/schemas/GeoPoint"
-            - type: "null"
-        webUrl: { type: string, format: uri }
+      description: A listed item, with the place the listing shows.
+      allOf:
+        - $ref: "#/components/schemas/Item"
+        - type: object
+          required: [location]
+          properties:
+            location:
+              oneOf:
+                - $ref: "#/components/schemas/GeoPoint"
+                - type: "null"
 
     LibraryPage:
       type: object
